@@ -4,6 +4,7 @@
  * POST /api/disputes                         → open a new dispute (OPEN state)
  * GET  /api/disputes/:disputeId              → get dispute state
  * GET  /api/disputes/escrow/:escrowId        → list disputes for an escrow
+ * GET  /api/disputes/mine?limit=&offset=     → paginated dispute history for the caller (#417)
  * GET  /api/disputes/sla/breaches            → list ESCALATED disputes past SLA
  * GET  /api/disputes/metrics                 → aggregate metrics for analytics (#273)
  * POST /api/disputes/:disputeId/escalate     → OPEN → ESCALATED
@@ -28,8 +29,9 @@
 
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { disputeService } from "../services/dispute.service";
+import { disputeService, MAX_DISPUTE_PAGE_SIZE } from "../services/dispute.service";
 import { changelogService } from "../services/changelog.service";
+import { CHANGELOG_ENTRY_TYPES } from "../services/changelog-taxonomy";
 import { AppError } from "../middleware/errorHandler";
 
 export const disputesRouter = Router();
@@ -50,6 +52,11 @@ const openSchema = z.object({
 const metricsQuerySchema = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
+});
+
+const historyQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(MAX_DISPUTE_PAGE_SIZE).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
 });
 
 const resolveBodySchema = z.object({
@@ -90,8 +97,8 @@ async function recordSlaBreachAlert(
     // One alert per breach: the deterministic entryId makes repeated reads of
     // /sla/breaches collide with the existing write-once entry (swallowed below).
     await changelogService.appendEntry({
-      entryId: `dispute.sla_breach:${dispute.disputeId}`,
-      action: "dispute.sla_breach",
+      entryId: `${CHANGELOG_ENTRY_TYPES.DISPUTE_SLA_BREACH}:${dispute.disputeId}`,
+      action: CHANGELOG_ENTRY_TYPES.DISPUTE_SLA_BREACH,
       actorId: "system",
       resourceId: dispute.disputeId,
       metadata: {
@@ -134,6 +141,40 @@ disputesRouter.post("/", async (req: Request, res: Response) => {
 disputesRouter.get("/escrow/:escrowId", async (req: Request, res: Response) => {
   const disputes = await disputeService.listDisputesByEscrow(req.params.escrowId);
   return res.json({ disputes });
+});
+
+// GET /api/disputes/mine — must come before /:disputeId (#417)
+// Paginated dispute history for the authenticated caller. Identity comes from
+// the verified session (res.locals.user), never from the query string.
+disputesRouter.get("/mine", async (req: Request, res: Response) => {
+  const user = res.locals.user as { uid?: string } | undefined;
+  if (!user?.uid) {
+    return res.status(401).json({
+      error: { code: "DISPUTE_UNAUTHENTICATED", message: "Authentication required" },
+    });
+  }
+
+  const parsed = historyQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: {
+        code: "DISPUTE_INVALID_PAGINATION",
+        message: `limit must be between 1 and ${MAX_DISPUTE_PAGE_SIZE}, offset must be >= 0`,
+        details: parsed.error.flatten(),
+      },
+    });
+  }
+
+  const page = await disputeService.listDisputesByUserPaginated(user.uid, parsed.data);
+  return res.json({
+    disputes: page.disputes,
+    pagination: {
+      limit: page.limit,
+      offset: page.offset,
+      total: page.total,
+      hasMore: page.hasMore,
+    },
+  });
 });
 
 // GET /api/disputes/sla/breaches — must come before /:disputeId

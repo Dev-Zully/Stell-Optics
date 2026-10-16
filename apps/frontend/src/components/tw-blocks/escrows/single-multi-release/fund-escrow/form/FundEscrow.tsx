@@ -10,10 +10,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useFundEscrow } from "./useFundEscrow";
+import { TrustlinePrompt } from "../shared/TrustlinePrompt";
 import { Loader2 } from "lucide-react";
 
 export const FundEscrowForm = () => {
-  const { form, handleSubmit, isSubmitting } = useFundEscrow();
+  const { form, handleSubmit, isSubmitting, trustlineGuard } = useFundEscrow();
 
   return (
     <Form {...form}>
@@ -31,6 +32,16 @@ export const FundEscrowForm = () => {
             </FormItem>
           )}
         />
+
+        {trustlineGuard.missingAsset && (
+          <TrustlinePrompt
+            asset={trustlineGuard.missingAsset}
+            accountNotFound={trustlineGuard.accountNotFound}
+            isEstablishing={trustlineGuard.isEstablishing}
+            onEstablish={trustlineGuard.establish}
+            onDismiss={trustlineGuard.dismiss}
+          />
+        )}
 
         <div className="mt-4">
           <Button

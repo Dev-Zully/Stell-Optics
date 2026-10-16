@@ -57,6 +57,10 @@ export const envSchema = z.object({
     .optional(),
   STELLAR_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
 
+  // Set by CI providers (e.g. GitHub Actions sets CI=true). A CI runner is
+  // never treated as production by the mainnet submission guard (#415).
+  CI: z.string().optional(),
+
   // Error tracking (#111) — unset in local dev, Sentry stays disabled
   SENTRY_DSN: z.string().url("SENTRY_DSN must be a valid URL").optional(),
 

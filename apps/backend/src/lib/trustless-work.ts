@@ -15,6 +15,7 @@
  */
 import { Keypair, Networks, TransactionBuilder } from "@stellar/stellar-sdk";
 import { env } from "../config/env";
+import { assertMainnetSubmissionAllowed } from "./network-guard";
 
 export type EscrowType = "single-release" | "multi-release";
 
@@ -232,6 +233,15 @@ export function createTrustlessWorkClient(): TrustlessWorkClient {
 
   return {
     async resolveDispute({ contractId, escrowType, distributions, asset, milestoneIndex }) {
+      // Defence in depth (#415): never submit to mainnet outside production,
+      // even if STELLAR_NETWORK / TRUSTLESS_WORK_API_URL are misconfigured.
+      assertMainnetSubmissionAllowed({
+        nodeEnv: env.NODE_ENV,
+        stellarNetwork: env.STELLAR_NETWORK,
+        trustlessWorkApiUrl: env.TRUSTLESS_WORK_API_URL,
+        ci: env.CI,
+      });
+
       const { apiUrl, apiKey, signer, networkPassphrase } = requireTrustlessWorkConfig();
 
       const endpoint = escrowType === "single-release" ? "resolve-dispute" : "resolve-milestone-dispute";

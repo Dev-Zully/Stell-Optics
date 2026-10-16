@@ -68,6 +68,7 @@
 
 import { AppError } from "../middleware/errorHandler";
 import { ChangelogService } from "./changelog.service";
+import { CHANGELOG_ENTRY_TYPES, DISPUTE_EVENT_ENTRY_TYPES } from "./changelog-taxonomy";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,19 @@ export interface Dispute {
   escalatedAt?: string;
   resolvedAt?: string;
   resolution?: string;
+}
+
+/** Default / max page size for the dispute-history list (issue #417). */
+export const DEFAULT_DISPUTE_PAGE_SIZE = 10;
+export const MAX_DISPUTE_PAGE_SIZE = 50;
+
+/** A bounded page of disputes, mirroring the changelog pagination shape. */
+export interface DisputePage {
+  disputes: Dispute[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 }
 
 export const DISPUTE_ERROR_CODES = {
@@ -291,6 +305,20 @@ export class DisputeService {
     };
 
     await this.store.set(disputeId, dispute);
+
+    // Best-effort audit entry for the opening of the dispute (taxonomy #416).
+    try {
+      await this.changelog.appendEntry({
+        entryId: `${CHANGELOG_ENTRY_TYPES.DISPUTE_RAISED}:${disputeId}`,
+        action: CHANGELOG_ENTRY_TYPES.DISPUTE_RAISED,
+        actorId: raisedBy,
+        resourceId: disputeId,
+        metadata: { escrowId, fromState: null, toState: "OPEN", reason },
+      });
+    } catch {
+      // Changelog is best-effort; the dispute was already persisted.
+    }
+
     return dispute;
   }
 
@@ -364,9 +392,10 @@ export class DisputeService {
     // block or roll back the transition, so failures are swallowed after the
     // dispute has been persisted.
     try {
+      const entryType = DISPUTE_EVENT_ENTRY_TYPES[event];
       await this.changelog.appendEntry({
-        entryId: `dispute.${event}:${disputeId}:${now}`,
-        action: `dispute.${event}`,
+        entryId: `${entryType}:${disputeId}:${now}`,
+        action: entryType,
         actorId: dispute.raisedBy,
         resourceId: disputeId,
         metadata: {
@@ -391,6 +420,37 @@ export class DisputeService {
   /** Lists all disputes for an escrow. */
   async listDisputesByEscrow(escrowId: string): Promise<Dispute[]> {
     return this.store.listByEscrow(escrowId);
+  }
+
+  /**
+   * Returns a bounded page of disputes raised by `userId`, newest first
+   * (issue #417). `limit` is clamped to [1, MAX_DISPUTE_PAGE_SIZE] and
+   * defaults to DEFAULT_DISPUTE_PAGE_SIZE; `offset` is clamped to >= 0.
+   */
+  async listDisputesByUserPaginated(
+    userId: string,
+    options: { limit?: number; offset?: number } = {}
+  ): Promise<DisputePage> {
+    const all = this.store.listAll ? await this.store.listAll() : await this.collectAll();
+    const mine = all
+      .filter((d) => d.raisedBy === userId)
+      .sort((a, b) => b.openedAt.localeCompare(a.openedAt));
+
+    const rawLimit = Math.floor(options.limit ?? DEFAULT_DISPUTE_PAGE_SIZE);
+    const limit = Number.isFinite(rawLimit) && rawLimit >= 1
+      ? Math.min(rawLimit, MAX_DISPUTE_PAGE_SIZE)
+      : DEFAULT_DISPUTE_PAGE_SIZE;
+    const rawOffset = Math.floor(options.offset ?? 0);
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+
+    const disputes = mine.slice(offset, offset + limit);
+    return {
+      disputes,
+      total: mine.length,
+      limit,
+      offset,
+      hasMore: offset + disputes.length < mine.length,
+    };
   }
 
   /** Lists every dispute currently in `state`. */

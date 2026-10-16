@@ -39,6 +39,7 @@ import {
   TrustlessWorkNotConfiguredError,
   trustlessWorkClient,
 } from "../lib/trustless-work";
+import { MainnetSubmissionBlockedError } from "../lib/network-guard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -173,6 +174,7 @@ export const REFUND_ERROR_CODES = {
   INVALID_PAYLOAD: "REFUND_INVALID_PAYLOAD",
   EXECUTION_FAILED: "REFUND_EXECUTION_FAILED",
   EXECUTION_UNAVAILABLE: "REFUND_EXECUTION_UNAVAILABLE",
+  MAINNET_BLOCKED: "REFUND_MAINNET_SUBMISSION_BLOCKED",
 } as const;
 
 const STELLAR_ADDRESS = /^[GC][A-Z2-7]{55}$/;
@@ -250,6 +252,9 @@ export class RefundService {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await this.store.set(refundId, { ...record, status: "failed", failureReason: reason });
+      if (err instanceof MainnetSubmissionBlockedError) {
+        throw new AppError(503, REFUND_ERROR_CODES.MAINNET_BLOCKED, err.message);
+      }
       if (err instanceof TrustlessWorkNotConfiguredError) {
         throw new AppError(503, REFUND_ERROR_CODES.EXECUTION_UNAVAILABLE, "On-chain refunds are not configured");
       }

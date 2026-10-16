@@ -18,9 +18,10 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { useFundEscrow } from "./useFundEscrow";
+import { TrustlinePrompt } from "../shared/TrustlinePrompt";
 
 export const FundEscrowDialog = () => {
-  const { form, handleSubmit, isSubmitting } = useFundEscrow();
+  const { form, handleSubmit, isSubmitting, trustlineGuard } = useFundEscrow();
 
   return (
     <Dialog>
@@ -52,6 +53,16 @@ export const FundEscrowDialog = () => {
                 </FormItem>
               )}
             />
+
+            {trustlineGuard.missingAsset && (
+              <TrustlinePrompt
+                asset={trustlineGuard.missingAsset}
+                accountNotFound={trustlineGuard.accountNotFound}
+                isEstablishing={trustlineGuard.isEstablishing}
+                onEstablish={trustlineGuard.establish}
+                onDismiss={trustlineGuard.dismiss}
+              />
+            )}
 
             <div className="mt-4">
               <Button

@@ -34,6 +34,8 @@
  * reused against a different escrow;
  * 502 REFUND_EXECUTION_FAILED if the chain rejected it;
  * 503 REFUND_EXECUTION_UNAVAILABLE if Trustless Work isn't configured;
+ * 503 REFUND_MAINNET_SUBMISSION_BLOCKED if a non-production (or CI)
+ * environment is configured to submit against mainnet (issue #415);
  * 409 REFUND_NEEDS_MANUAL_INTERVENTION once the retry budget is exhausted.
  *
  * GET /api/refunds/claim/:refundId

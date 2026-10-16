@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Bell, BellRing, Building2, Heart, Wallet, Home, LayoutDashboard, PlusCircle, PlusSquare, Shield, Users } from "lucide-react";
+import { Bell, BellRing, Building2, Heart, Wallet, Home, LayoutDashboard, PlusCircle, PlusSquare, Scale, Shield, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/auth/LogoutButton";
@@ -142,6 +142,22 @@ export function SideBar({
           {/* Tooltip for rail mode */}
           <span className="hidden md:group-hover:block lg:group-hover:hidden absolute left-14 bg-popover text-popover-foreground px-2 py-1 rounded shadow-md text-xs z-50 whitespace-nowrap">
             Notifications
+          </span>
+        </Link>
+        <Link
+          href="/dashboard/disputes"
+          onClick={onClose}
+          className={cn(
+            "flex items-center gap-3 p-2 rounded-lg hover:bg-accent transition-colors duration-200 w-full group relative dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-white",
+            pathname?.startsWith("/dashboard/disputes") &&
+              "bg-accent font-medium dark:bg-gray-800 dark:text-white",
+          )}
+        >
+          <Scale className="w-6 h-6 shrink-0 dark:text-gray-400" />
+          <span className="md:hidden lg:block">Disputes</span>
+          {/* Tooltip for rail mode */}
+          <span className="hidden md:group-hover:block lg:group-hover:hidden absolute left-14 bg-popover text-popover-foreground px-2 py-1 rounded shadow-md text-xs z-50 whitespace-nowrap">
+            Disputes
           </span>
         </Link>
         <Link
