@@ -35,15 +35,45 @@ export const envSchema = z.object({
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(900000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
-  INTERNAL_API_SECRET: z.string().min(1).optional(),
   EMAIL_PROVIDER: z.string().optional(),
   SENDGRID_API_KEY: z.string().min(1).optional(),
   NOTIFICATION_FROM_EMAIL: z.string().email().default("noreply@truestub.local"),
   HASURA_GRAPHQL_URL: z.string().url("HASURA_GRAPHQL_URL must be a valid URL").optional(),
   HASURA_GRAPHQL_ADMIN_SECRET: z.string().min(1).optional(),
 
+  // Postgres connection for node-pg-migrate (`yarn migrate:up`) — #250
+  DATABASE_URL: z.string().url("DATABASE_URL must be a valid URL").optional(),
+
+  // Trustless Work escrow API + dispute-resolver signing key — required to
+  // execute refunds on-chain (#252). Unset → refund execution fails with 503.
+  TRUSTLESS_WORK_API_URL: z
+    .string()
+    .url("TRUSTLESS_WORK_API_URL must be a valid URL")
+    .default("https://dev.api.trustlesswork.com"),
+  TRUSTLESS_WORK_API_KEY: z.string().min(1).optional(),
+  TRUSTLESS_WORK_DISPUTE_RESOLVER_SECRET: z
+    .string()
+    .regex(/^S[A-Z2-7]{55}$/, "TRUSTLESS_WORK_DISPUTE_RESOLVER_SECRET must be a Stellar secret key (S...)")
+    .optional(),
+  STELLAR_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
+
+  // Dispute-resolver wallet balance monitoring (#420). The wallet must hold
+  // enough float to execute refunds; a periodic check alerts when its balance
+  // drops below the configured threshold so refunds don't silently start
+  // failing. Unset address → monitoring is skipped.
+  DISPUTE_RESOLVER_WALLET_ADDRESS: z
+    .string()
+    .regex(/^G[A-Z2-7]{55}$/, "DISPUTE_RESOLVER_WALLET_ADDRESS must be a Stellar public key (G...)")
+    .optional(),
+  DISPUTE_RESOLVER_LOW_BALANCE_THRESHOLD: z.coerce.number().positive().default(100),
+
   // Error tracking (#111) — unset in local dev, Sentry stays disabled
   SENTRY_DSN: z.string().url("SENTRY_DSN must be a valid URL").optional(),
+
+  // Dedicated, higher-urgency alert channel for refund/transfer failures
+  // (#328). Distinct from the general Sentry error stream so these events get
+  // human attention faster. When unset, alerts fall back to the error log.
+  CRITICAL_ALERT_WEBHOOK_URL: z.string().url("CRITICAL_ALERT_WEBHOOK_URL must be a valid URL").optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -51,9 +81,16 @@ export type Env = z.infer<typeof envSchema>;
 /**
  * Validates raw environment variables against the schema.
  * Fails fast with a clear, formatted error message if required variables are missing or malformed.
+ *
+ * Empty strings are treated as unset, so `SENTRY_DSN=` in a .env file or a
+ * `${VAR:-}` passthrough in docker-compose.yml falls back to the optional/
+ * default behaviour instead of failing URL/min-length validation.
  */
 export function validateEnv(rawEnv: NodeJS.ProcessEnv = process.env): Env {
-  const result = envSchema.safeParse(rawEnv);
+  const nonEmpty = Object.fromEntries(
+    Object.entries(rawEnv).filter(([, value]) => value !== undefined && value.trim() !== "")
+  );
+  const result = envSchema.safeParse(nonEmpty);
 
   if (!result.success) {
     const errorMessages = result.error.errors
