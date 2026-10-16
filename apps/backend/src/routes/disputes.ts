@@ -28,9 +28,11 @@
 
 import { Router, Request, Response } from "express";
 import { z } from "zod";
+import * as Sentry from "@sentry/node";
 import { disputeService } from "../services/dispute.service";
 import { changelogService } from "../services/changelog.service";
 import { AppError } from "../middleware/errorHandler";
+import { getRequestId } from "../middleware/requestLogger";
 
 export const disputesRouter = Router();
 
@@ -55,6 +57,21 @@ const metricsQuerySchema = z.object({
 const resolveBodySchema = z.object({
   resolution: z.string().optional(),
 });
+
+/**
+ * Attach the request correlation ID to the current Sentry scope so every
+ * Sentry event emitted while handling this dispute request (including events
+ * raised deeper in the refund → dispute → changelog chain) carries the same
+ * correlation ID as the structured log lines.
+ */
+function tagSentryWithRequestId(req: Request): string | undefined {
+  const requestId = getRequestId(req);
+  if (requestId) {
+    Sentry.getCurrentScope().setTag("request_id", requestId);
+    Sentry.getCurrentScope().setContext("correlation", { requestId });
+  }
+  return requestId;
+}
 
 function handleAppError(err: unknown, res: Response): Response | void {
   if (err instanceof AppError) {
@@ -85,6 +102,7 @@ function escalatedSlaBreach(
 async function recordSlaBreachAlert(
   dispute: { disputeId: string; escrowId: string; escalatedAt?: string | Date | null },
   elapsedMs: number,
+  requestId?: string,
 ): Promise<void> {
   try {
     // One alert per breach: the deterministic entryId makes repeated reads of
@@ -101,16 +119,21 @@ async function recordSlaBreachAlert(
         elapsedMs,
         slaMs: ESCALATED_SLA_MS,
         policy: "manual_intervention",
+        requestId: requestId ?? null,
       },
     });
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error(`Failed to write SLA breach alert for dispute ${dispute.disputeId}`, err);
+    console.error(
+      `Failed to write SLA breach alert for dispute ${dispute.disputeId} (requestId=${requestId ?? "unknown"})`,
+      err,
+    );
   }
 }
 
 // POST /api/disputes
 disputesRouter.post("/", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
   const parsed = openSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({
@@ -123,7 +146,7 @@ disputesRouter.post("/", async (req: Request, res: Response) => {
   }
 
   try {
-    const dispute = await disputeService.openDispute(parsed.data);
+    const dispute = await disputeService.openDispute(parsed.data, { requestId });
     return res.status(201).json({ dispute });
   } catch (err) {
     return handleAppError(err, res);
@@ -132,13 +155,15 @@ disputesRouter.post("/", async (req: Request, res: Response) => {
 
 // GET /api/disputes/escrow/:escrowId — must come before /:disputeId
 disputesRouter.get("/escrow/:escrowId", async (req: Request, res: Response) => {
-  const disputes = await disputeService.listDisputesByEscrow(req.params.escrowId);
+  const requestId = tagSentryWithRequestId(req);
+  const disputes = await disputeService.listDisputesByEscrow(req.params.escrowId, { requestId });
   return res.json({ disputes });
 });
 
 // GET /api/disputes/sla/breaches — must come before /:disputeId
-disputesRouter.get("/sla/breaches", async (_req: Request, res: Response) => {
-  const escalated = await disputeService.listDisputesByState("ESCALATED");
+disputesRouter.get("/sla/breaches", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
+  const escalated = await disputeService.listDisputesByState("ESCALATED", { requestId });
   const now = Date.now();
   const breaches = escalated
     .map((dispute) => {
@@ -148,7 +173,9 @@ disputesRouter.get("/sla/breaches", async (_req: Request, res: Response) => {
     .filter((entry): entry is { dispute: (typeof escalated)[number]; elapsedMs: number } => entry !== null);
 
   // Alert on each breach so operators can reassign to a different resolver.
-  await Promise.all(breaches.map((entry) => recordSlaBreachAlert(entry.dispute, entry.elapsedMs)));
+  await Promise.all(
+    breaches.map((entry) => recordSlaBreachAlert(entry.dispute, entry.elapsedMs, requestId)),
+  );
 
   return res.json({
     slaMs: ESCALATED_SLA_MS,
@@ -163,6 +190,7 @@ disputesRouter.get("/sla/breaches", async (_req: Request, res: Response) => {
 
 // GET /api/disputes/metrics?from=&to= — must come before /:disputeId (#273)
 disputesRouter.get("/metrics", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
   const parsed = metricsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({
@@ -174,13 +202,14 @@ disputesRouter.get("/metrics", async (req: Request, res: Response) => {
     });
   }
 
-  const metrics = await disputeService.getMetrics(parsed.data);
+  const metrics = await disputeService.getMetrics(parsed.data, { requestId });
   return res.json({ metrics });
 });
 
 // GET /api/disputes/:disputeId
 disputesRouter.get("/:disputeId", async (req: Request, res: Response) => {
-  const dispute = await disputeService.getDispute(req.params.disputeId);
+  const requestId = tagSentryWithRequestId(req);
+  const dispute = await disputeService.getDispute(req.params.disputeId, { requestId });
   if (!dispute) {
     return res.status(404).json({
       error: { code: "DISPUTE_NOT_FOUND", message: `Dispute not found: ${req.params.disputeId}` },
@@ -191,8 +220,9 @@ disputesRouter.get("/:disputeId", async (req: Request, res: Response) => {
 
 // POST /api/disputes/:disputeId/escalate
 disputesRouter.post("/:disputeId/escalate", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
   try {
-    const dispute = await disputeService.transition(req.params.disputeId, "escalate");
+    const dispute = await disputeService.transition(req.params.disputeId, "escalate", { requestId });
     return res.json({ dispute });
   } catch (err) {
     return handleAppError(err, res);
@@ -201,10 +231,14 @@ disputesRouter.post("/:disputeId/escalate", async (req: Request, res: Response) 
 
 // POST /api/disputes/:disputeId/resolve
 disputesRouter.post("/:disputeId/resolve", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
   const { resolution } = resolveBodySchema.parse(req.body || {});
 
   try {
-    const dispute = await disputeService.transition(req.params.disputeId, "resolve", { resolution });
+    const dispute = await disputeService.transition(req.params.disputeId, "resolve", {
+      resolution,
+      requestId,
+    });
     return res.json({ dispute });
   } catch (err) {
     return handleAppError(err, res);
@@ -213,8 +247,9 @@ disputesRouter.post("/:disputeId/resolve", async (req: Request, res: Response) =
 
 // POST /api/disputes/:disputeId/withdraw
 disputesRouter.post("/:disputeId/withdraw", async (req: Request, res: Response) => {
+  const requestId = tagSentryWithRequestId(req);
   try {
-    const dispute = await disputeService.transition(req.params.disputeId, "withdraw");
+    const dispute = await disputeService.transition(req.params.disputeId, "withdraw", { requestId });
     return res.json({ dispute });
   } catch (err) {
     return handleAppError(err, res);

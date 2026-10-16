@@ -149,6 +149,32 @@ describe("OwnershipTransferService — atomic workflow (#154)", () => {
       const fulfilled = results.filter((r) => r.status === "fulfilled");
       expect(fulfilled).toHaveLength(1);
     });
+
+    it("only one of two concurrent identical initiate calls is applied — no double-transfer", async () => {
+      const { service, store } = makeService();
+
+      const results = await Promise.allSettled([
+        service.initiateTransfer(base),
+        service.initiateTransfer(base),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const err = (rejected[0] as PromiseRejectedResult).reason as AppError;
+      expect(err.code).toBe(TRANSFER_ERROR_CODES.CONFLICT);
+
+      // Ownership state stays consistent: exactly one transfer exists and it is PENDING.
+      const stored = await service.getTransfer(base.transferId);
+      expect(stored).not.toBeUndefined();
+      expect(stored!.state).toBe("PENDING");
+      expect(stored!.fromOwner).toBe("alice");
+      expect(stored!.toOwner).toBe("bob");
+      expect(store.size()).toBe(1);
+    });
   });
 
   describe("getTransfer", () => {

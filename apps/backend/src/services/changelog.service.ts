@@ -27,6 +27,7 @@
  */
 
 import { AppError } from "../middleware/errorHandler";
+import { getRequestId } from "../middleware/requestLogger";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,13 @@ export interface ChangelogEntry {
   timestamp: string;
   /** Arbitrary caller-supplied context; frozen after write. */
   metadata?: Record<string, unknown>;
+  /**
+   * Correlation ID of the originating request (issue #425).
+   *
+   * Threaded through the refund → dispute → changelog chain so a support
+   * investigation can find every log line / Sentry event for one refund.
+   */
+  requestId?: string;
 }
 
 export type ChangelogEventType = "ENTRY_APPENDED" | "ENTRY_REMOVED";
@@ -51,6 +59,11 @@ export interface ChangelogEvent {
   type: ChangelogEventType;
   entry: ChangelogEntry;
   occurredAt: string;
+  /**
+   * Correlation ID of the originating request (issue #425). Mirrors
+   * `entry.requestId` so audit-log forwarders can group events per request.
+   */
+  requestId?: string;
 }
 
 /**
@@ -177,8 +190,13 @@ export class ChangelogService {
     actorId: string;
     resourceId: string;
     metadata?: Record<string, unknown>;
+    /** Optional explicit correlation ID; falls back to the ambient request ID. */
+    requestId?: string;
   }): Promise<ChangelogEntry> {
     const { entryId, action, actorId, resourceId } = payload;
+    // Prefer an explicitly-supplied ID (e.g. carried across an async boundary),
+    // otherwise pick up the ambient request-scoped correlation ID.
+    const requestId = payload.requestId ?? getRequestId();
 
     if (!entryId || !action || !actorId || !resourceId) {
       throw new AppError(
@@ -205,10 +223,12 @@ export class ChangelogService {
       timestamp: new Date().toISOString(),
       // Deep-freeze metadata so stored objects cannot be mutated in-place
       metadata: payload.metadata ? JSON.parse(JSON.stringify(payload.metadata)) : undefined,
+      // Correlation ID shared with the originating refund request
+      requestId,
     };
 
     await this.store.set(entryId, entry);
-    this.emit({ type: "ENTRY_APPENDED", entry, occurredAt: entry.timestamp });
+    this.emit({ type: "ENTRY_APPENDED", entry, occurredAt: entry.timestamp, requestId });
     return entry;
   }
 
@@ -226,9 +246,12 @@ export class ChangelogService {
     actorId: string;
     resourceId: string;
     metadata?: Record<string, unknown>;
+    /** Optional explicit correlation ID; falls back to the ambient request ID. */
+    requestId?: string;
   }): Promise<ChangelogEntry> {
     const { action, actorId, resourceId } = payload;
     const entryId = `${action}:${resourceId}`;
+    const requestId = payload.requestId ?? getRequestId();
 
     const existing = await this.store.get(entryId);
     if (existing) {
@@ -241,6 +264,7 @@ export class ChangelogService {
       actorId,
       resourceId,
       metadata: payload.metadata,
+      requestId,
     });
   }
 
@@ -281,7 +305,12 @@ export class ChangelogService {
     }
 
     await this.store.delete(entryId);
-    this.emit({ type: "ENTRY_REMOVED", entry, occurredAt: new Date().toISOString() });
+    this.emit({
+      type: "ENTRY_REMOVED",
+      entry,
+      occurredAt: new Date().toISOString(),
+      requestId: entry.requestId ?? getRequestId(),
+    });
     return entry;
   }
 

@@ -25,6 +25,9 @@
  */
 
 import { AppError } from "../middleware/errorHandler";
+import { getRequestId } from "../middleware/requestLogger";
+import { logger } from "../utils/logger";
+import * as Sentry from "@sentry/node";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +48,14 @@ export interface OwnershipTransfer {
 export interface OwnershipStore {
   get(transferId: string): Promise<OwnershipTransfer | undefined>;
   set(transferId: string, record: OwnershipTransfer): Promise<void>;
+  /**
+   * Atomically inserts a new transfer record, relying on a unique constraint
+   * on `transferId` to reject duplicates.  Must throw
+   * `AppError(409, TRANSFER_ERROR_CODES.CONFLICT, ...)` when the transferId
+   * already exists.  This is the authoritative guard against concurrent
+   * identical transfer requests (issue #424).
+   */
+  insertIfAbsent(transferId: string, record: OwnershipTransfer): Promise<void>;
 }
 
 export const TRANSFER_ERROR_CODES = {
@@ -64,6 +75,19 @@ export class InMemoryOwnershipStore implements OwnershipStore {
   }
 
   async set(transferId: string, record: OwnershipTransfer): Promise<void> {
+    this.store.set(transferId, record);
+  }
+
+  async insertIfAbsent(transferId: string, record: OwnershipTransfer): Promise<void> {
+    // Single-threaded JS guarantees this check-then-write is atomic within the
+    // event loop; a DB-backed store would rely on a unique constraint instead.
+    if (this.store.has(transferId)) {
+      throw new AppError(
+        409,
+        TRANSFER_ERROR_CODES.CONFLICT,
+        `Transfer ${transferId} already exists with state: ${this.store.get(transferId)!.state}`
+      );
+    }
     this.store.set(transferId, record);
   }
 
@@ -138,13 +162,14 @@ export class OwnershipTransferService {
       throw new AppError(400, TRANSFER_ERROR_CODES.INVALID_PAYLOAD, "transferId, escrowId, fromOwner, and toOwner are required");
     }
 
+    const requestId = getRequestId();
+
+    // The per-transferId mutex serialises in-process callers, but the DB
+    // unique constraint (via insertIfAbsent) is the authoritative guard: it
+    // rejects duplicate transferIds before any ownership mutation or on-chain
+    // action, so two concurrent identical requests cannot both apply.
     const release = await this.getLock(transferId).acquire();
     try {
-      const existing = await this.store.get(transferId);
-      if (existing) {
-        throw new AppError(409, TRANSFER_ERROR_CODES.CONFLICT, `Transfer ${transferId} already exists with state: ${existing.state}`);
-      }
-
       const record: OwnershipTransfer = {
         transferId,
         escrowId,
@@ -154,7 +179,39 @@ export class OwnershipTransferService {
         initiatedAt: new Date().toISOString(),
       };
 
-      await this.store.set(transferId, record);
+      logger.info("ownership-transfer.initiate.attempt", {
+        requestId,
+        transferId,
+        escrowId,
+        fromOwner,
+        toOwner,
+      });
+
+      try {
+        await this.store.insertIfAbsent(transferId, record);
+      } catch (err) {
+        if (err instanceof AppError && err.code === TRANSFER_ERROR_CODES.CONFLICT) {
+          logger.warn("ownership-transfer.initiate.conflict", {
+            requestId,
+            transferId,
+            escrowId,
+          });
+          Sentry.captureEvent({
+            message: "ownership-transfer.initiate.conflict",
+            level: "warning",
+            tags: { requestId, transferId, escrowId },
+          });
+        }
+        throw err;
+      }
+
+      logger.info("ownership-transfer.initiate.success", {
+        requestId,
+        transferId,
+        escrowId,
+        state: record.state,
+      });
+
       return record;
     } finally {
       release();
@@ -192,15 +249,33 @@ export class OwnershipTransferService {
       throw new AppError(400, TRANSFER_ERROR_CODES.INVALID_PAYLOAD, "transferId is required");
     }
 
+    const requestId = getRequestId();
+
     const release = await this.getLock(transferId).acquire();
     try {
       const transfer = await this.store.get(transferId);
 
       if (!transfer) {
+        logger.warn("ownership-transfer.finalize.not-found", {
+          requestId,
+          transferId,
+          nextState,
+        });
         throw new AppError(404, TRANSFER_ERROR_CODES.NOT_FOUND, `Transfer ${transferId} not found`);
       }
 
       if (transfer.state !== "PENDING") {
+        logger.warn("ownership-transfer.finalize.already-finalized", {
+          requestId,
+          transferId,
+          currentState: transfer.state,
+          nextState,
+        });
+        Sentry.captureEvent({
+          message: "ownership-transfer.finalize.already-finalized",
+          level: "warning",
+          tags: { requestId, transferId, currentState: transfer.state, nextState },
+        });
         throw new AppError(
           409,
           TRANSFER_ERROR_CODES.ALREADY_FINALIZED,
@@ -215,6 +290,13 @@ export class OwnershipTransferService {
       };
 
       await this.store.set(transferId, updated);
+
+      logger.info("ownership-transfer.finalize.success", {
+        requestId,
+        transferId,
+        state: updated.state,
+      });
+
       return updated;
     } finally {
       release();

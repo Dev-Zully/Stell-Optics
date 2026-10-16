@@ -7,14 +7,29 @@
  *
  * In development the transport is pino-pretty for human-readable output.
  * In production/test it emits raw JSON, suitable for log aggregators.
+ *
+ * Correlation (#425): every log line automatically includes the current
+ * request correlation ID when running within a request context. The ID is
+ * read from the AsyncLocalStorage store established by requestLogger.ts, so
+ * services that log outside the HTTP lifecycle (e.g. refunds.ts, dispute
+ * resolution, Hasura status updates, changelog) still emit the same
+ * correlation ID as the originating request.
  */
 import pino from "pino";
 import { env } from "../config/env";
+import { getRequestId } from "./requestLogger";
 
 const isDev = env.NODE_ENV === "development";
 
 export const logger = pino({
   level: env.LOG_LEVEL,
+  // Attach the current request correlation ID (if any) to every log line.
+  // `mixin` runs per log call, so it picks up the AsyncLocalStorage context
+  // active at the time of logging — including async continuations.
+  mixin() {
+    const requestId = getRequestId();
+    return requestId ? { requestId } : {};
+  },
   ...(isDev
     ? {
         transport: {
