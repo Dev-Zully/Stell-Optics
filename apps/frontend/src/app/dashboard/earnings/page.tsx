@@ -36,7 +36,7 @@ function toPayoutEscrow(row: EscrowRow): PayoutEscrow {
     listingName: row.listing_name,
     amount: row.amount,
     currency: row.currency,
-    status: row.status === "released" ? "released" : "funded",
+    status: row.status,
     releasedAt: row.released_at ?? undefined,
   };
 }

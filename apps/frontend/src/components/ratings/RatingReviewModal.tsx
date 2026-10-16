@@ -14,7 +14,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { CheckCircle2, MessageSquare, Star } from "lucide-react";
+import { CheckCircle2, MessageSquare, Star, ShieldAlert } from "lucide-react";
+import { filterReviewContent } from "@/lib/moderation/reviewFilter";
 
 interface RatingReviewModalProps {
   escrowId: string;
@@ -31,6 +32,7 @@ interface RatingReviewModalProps {
     rating: number;
     comment: string;
     role: string;
+    moderation_status?: "published" | "pending";
   }) => Promise<void> | void;
   triggerButton?: React.ReactNode;
 }
@@ -50,11 +52,22 @@ export function RatingReviewModal({
   const [comment, setComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [moderationNotice, setModerationNotice] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rating < 1) return;
 
+    const moderation = filterReviewContent(comment);
+
+    if (moderation.blocked) {
+      setModerationNotice(
+        "Your review contains language that needs moderation review and has been held for review. Please revise your review before submitting."
+      );
+      return;
+    }
+
+    setModerationNotice(null);
     setIsSubmitting(true);
     try {
       if (onSubmitReview) {
@@ -66,6 +79,7 @@ export function RatingReviewModal({
           rating,
           comment,
           role,
+          moderation_status: moderation.flagged ? "pending" : "published",
         });
       }
       setIsSubmitted(true);
@@ -73,6 +87,7 @@ export function RatingReviewModal({
         setIsSubmitted(false);
         setOpen(false);
         setComment("");
+        setModerationNotice(null);
       }, 1500);
     } catch (err) {
       console.error("Failed to submit review:", err);
@@ -139,14 +154,29 @@ export function RatingReviewModal({
                 <Textarea
                   id="comment"
                   value={comment}
-                  onChange={(e) => setComment(e.target.value)}
+                  onChange={(e) => {
+                    setComment(e.target.value);
+                    if (moderationNotice) setModerationNotice(null);
+                  }}
                   placeholder={`Share details about your experience with ${revieweeName} (e.g. ticket delivery speed, communication, trustworthiness)...`}
                   className="min-h-[100px] resize-y"
                   maxLength={500}
+                  aria-invalid={moderationNotice ? true : undefined}
+                  aria-describedby={moderationNotice ? "comment-moderation-notice" : undefined}
                 />
                 <div className="flex justify-end text-xs text-muted-foreground">
                   {comment.length}/500
                 </div>
+                {moderationNotice && (
+                  <div
+                    id="comment-moderation-notice"
+                    role="alert"
+                    className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400"
+                  >
+                    <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>{moderationNotice}</span>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -27,11 +27,25 @@ export function SellerEarnings({ escrows }: { escrows: PayoutEscrow[] }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <Card className="p-4">
-          <p className="text-sm text-muted-foreground">Total earnings</p>
+          <p className="text-sm text-muted-foreground">Confirmed earnings</p>
           <p className="text-3xl font-bold" data-testid="total-earnings">
-            {summary.total.toLocaleString()} USDC
+            {summary.confirmedTotal.toLocaleString()} USDC
+          </p>
+        </Card>
+        <Card className="p-4 border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-muted-foreground">Pending / at-risk</p>
+            <span className="rounded-full bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900 dark:text-amber-100">
+              Pending
+            </span>
+          </div>
+          <p className="text-3xl font-bold text-amber-700 dark:text-amber-400" data-testid="pending-earnings">
+            {summary.pendingTotal.toLocaleString()} USDC
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Not yet available — awaiting release or under dispute.
           </p>
         </Card>
         <Card className="p-4">
