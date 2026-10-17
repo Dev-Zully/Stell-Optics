@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Express } from "express";
 import { env } from "./config/env";
+import { assertNetworkConfigMatches } from "./config/networkCheck";
 import { logger } from "./lib/logger";
 import { initSentry, Sentry } from "./lib/sentry";
 import { requestLogger } from "./middleware/requestLogger";
@@ -52,7 +53,25 @@ export function createApp(): Express {
 export const app = createApp();
 
 if (require.main === module) {
+  // Fail fast if the frontend and backend are configured for different Stellar
+  // networks (e.g. frontend on testnet, backend refunds on mainnet).
+  assertNetworkConfigMatches();
+
   app.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, "TrueStub backend listening");
+
+    // #420 — Periodically check the dispute-resolver wallet balance so a low
+    // balance alerts before it causes a failed refund.
+    if (env.DISPUTE_RESOLVER_WALLET_ADDRESS) {
+      startDisputeResolverBalanceMonitor();
+      logger.info(
+        { walletAddress: env.DISPUTE_RESOLVER_WALLET_ADDRESS },
+        "Dispute-resolver balance monitor started",
+      );
+    } else {
+      logger.warn(
+        "Dispute-resolver balance monitor not started: DISPUTE_RESOLVER_WALLET_ADDRESS is not configured",
+      );
+    }
   });
 }

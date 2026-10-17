@@ -15,6 +15,7 @@
  */
 import { Keypair, Networks, TransactionBuilder } from "@stellar/stellar-sdk";
 import { env } from "../config/env";
+import { getRequestId } from "./requestLogger";
 
 export type EscrowType = "single-release" | "multi-release";
 
@@ -38,6 +39,14 @@ export interface ResolveDisputeInput {
   asset: string;
   /** Required for multi-release escrows. */
   milestoneIndex?: string;
+  /**
+   * Correlation ID for the originating refund request (#425). Threaded through
+   * every outbound Trustless Work call (as `x-request-id`) and included in
+   * error context so a support investigation can trace one refund across
+   * refunds.ts → Trustless Work → Hasura → changelog. Falls back to the
+   * ambient request ID when omitted.
+   */
+  requestId?: string;
 }
 
 export interface SubmittedTransaction {
@@ -63,16 +72,20 @@ export interface TrustlessWorkClient {
    * Reads an escrow's live state from Trustless Work. Used by the
    * reconciliation job (#325) to detect drift between Hasura's
    * `escrow_transactions.status` and Trustless Work's authoritative state.
+   *
+   * `requestId` is the correlation ID for the originating request (#425); when
+   * omitted the ambient request ID is used.
    */
-  getEscrow(contractId: string): Promise<EscrowLiveState>;
+  getEscrow(contractId: string, requestId?: string): Promise<EscrowLiveState>;
 }
 
 export class TrustlessWorkError extends Error {
   constructor(
     message: string,
     public readonly statusCode?: number,
+    public readonly requestId?: string,
   ) {
-    super(message);
+    super(requestId ? `${message} [requestId=${requestId}]` : message);
     this.name = "TrustlessWorkError";
   }
 }
@@ -197,10 +210,30 @@ export function assertRefundAmountMatchesDisputedBalance(
  * The API key and signing secret are never included in logs or errors.
  */
 export function createTrustlessWorkClient(): TrustlessWorkClient {
-  async function post<T>(apiUrl: string, apiKey: string, path: string, body: unknown): Promise<T> {
+  /**
+   * Resolves the correlation ID for an outbound call: prefer the caller-supplied
+   * ID (threaded from the originating refund request), falling back to the
+   * ambient request ID from requestLogger so every outbound call is traceable
+   * even when the caller does not pass one explicitly (#425).
+   */
+  function resolveRequestId(explicit?: string): string | undefined {
+    return explicit ?? getRequestId() ?? undefined;
+  }
+
+  async function post<T>(
+    apiUrl: string,
+    apiKey: string,
+    path: string,
+    body: unknown,
+    requestId?: string,
+  ): Promise<T> {
     const response = await fetch(`${apiUrl}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": apiKey },
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        ...(requestId ? { "x-request-id": requestId } : {}),
+      },
       body: JSON.stringify(body),
     });
 
@@ -209,15 +242,19 @@ export function createTrustlessWorkClient(): TrustlessWorkClient {
       throw new TrustlessWorkError(
         `Trustless Work ${path} failed: ${json.message ?? response.statusText}`,
         response.status,
+        requestId,
       );
     }
     return json;
   }
 
-  async function get<T>(apiUrl: string, apiKey: string, path: string): Promise<T> {
+  async function get<T>(apiUrl: string, apiKey: string, path: string, requestId?: string): Promise<T> {
     const response = await fetch(`${apiUrl}${path}`, {
       method: "GET",
-      headers: { "x-api-key": apiKey },
+      headers: {
+        "x-api-key": apiKey,
+        ...(requestId ? { "x-request-id": requestId } : {}),
+      },
     });
 
     const json = (await response.json().catch(() => ({}))) as { message?: string } & T;
@@ -225,14 +262,16 @@ export function createTrustlessWorkClient(): TrustlessWorkClient {
       throw new TrustlessWorkError(
         `Trustless Work ${path} failed: ${json.message ?? response.statusText}`,
         response.status,
+        requestId,
       );
     }
     return json;
   }
 
   return {
-    async resolveDispute({ contractId, escrowType, distributions, asset, milestoneIndex }) {
+    async resolveDispute({ contractId, escrowType, distributions, asset, milestoneIndex, requestId }) {
       const { apiUrl, apiKey, signer, networkPassphrase } = requireTrustlessWorkConfig();
+      const correlationId = resolveRequestId(requestId);
 
       const endpoint = escrowType === "single-release" ? "resolve-dispute" : "resolve-milestone-dispute";
       const payload = {
@@ -248,38 +287,55 @@ export function createTrustlessWorkClient(): TrustlessWorkClient {
         apiKey,
         `/escrow/${escrowType}/${endpoint}`,
         payload,
+        correlationId,
       );
       if (!unsignedTransaction) {
-        throw new TrustlessWorkError(`Trustless Work /escrow/${escrowType}/${endpoint} returned no unsignedTransaction`);
+        throw new TrustlessWorkError(
+          `Trustless Work /escrow/${escrowType}/${endpoint} returned no unsignedTransaction`,
+          undefined,
+          correlationId,
+        );
       }
 
       const tx = TransactionBuilder.fromXDR(unsignedTransaction, networkPassphrase);
       tx.sign(signer);
       const txHash = tx.hash().toString("hex");
 
-      const result = await post<{ status?: string; message?: string }>(apiUrl, apiKey, "/helper/send-transaction", {
-        signedXdr: tx.toXDR(),
-      });
+      const result = await post<{ status?: string; message?: string }>(
+        apiUrl,
+        apiKey,
+        "/helper/send-transaction",
+        { signedXdr: tx.toXDR() },
+        correlationId,
+      );
       if (result.status !== "SUCCESS") {
         throw new TrustlessWorkError(
           `Stellar transaction ${txHash} was not accepted: ${result.message ?? result.status ?? "unknown status"}`,
+          undefined,
+          correlationId,
         );
       }
 
       return { txHash, status: result.status, message: result.message ?? "" };
     },
 
-    async getEscrow(contractId) {
+    async getEscrow(contractId, requestId) {
       const { apiUrl, apiKey } = requireTrustlessWorkConfig();
+      const correlationId = resolveRequestId(requestId);
 
       const json = await get<{ status?: string; escrow?: { status?: string } }>(
         apiUrl,
         apiKey,
         `/escrow/${encodeURIComponent(contractId)}`,
+        correlationId,
       );
       const status = json.status ?? json.escrow?.status;
       if (!status) {
-        throw new TrustlessWorkError(`Trustless Work /escrow/${contractId} returned no status`);
+        throw new TrustlessWorkError(
+          `Trustless Work /escrow/${contractId} returned no status`,
+          undefined,
+          correlationId,
+        );
       }
 
       return { contractId, status };

@@ -10,6 +10,8 @@
  * output in src/graphql/generated/ and the imports updated accordingly.
  */
 
+export type ReviewModerationStatus = "pending" | "approved" | "rejected";
+
 export type Review = {
   id: string;
   escrow_id: string;
@@ -20,6 +22,15 @@ export type Review = {
   comment?: string | null;
   role: "buyer" | "seller" | "tenant" | "owner";
   created_at: string;
+  /**
+   * Moderation state for the review (Issue #429).
+   *
+   * Reviews containing flagged content are held as `'pending'` (or
+   * `'rejected'`) rather than being published immediately, so the
+   * backend/query layer can avoid displaying unmoderated free-text on a
+   * user's public reputation profile.
+   */
+  moderation_status: ReviewModerationStatus;
 };
 
 export type UserReputationSummary = {
