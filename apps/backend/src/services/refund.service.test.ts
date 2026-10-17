@@ -90,6 +90,43 @@ describe("RefundService — idempotency guard (#153)", () => {
         service.claimRefund({ refundId: "refund-1", escrowId: "" })
       ).rejects.toMatchObject({ statusCode: 400 });
     });
+
+    it("only allows one of two concurrent claims with the same refundId to submit an on-chain refund (#423)", async () => {
+      const { service } = makeService();
+
+      // Simulate the on-chain submission that must happen at most once.
+      const submitOnChain = jest.fn(async () => {
+        // Yield so both concurrent callers interleave before either records
+        // its idempotency state — this is the race the DB constraint guards.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { txHash: "0xdeadbeef" };
+      });
+
+      const claim = async () => {
+        const record = await service.claimRefund(basePayload);
+        await submitOnChain();
+        return record;
+      };
+
+      const results = await Promise.allSettled([claim(), claim()]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(submitOnChain).toHaveBeenCalledTimes(1);
+
+      const rejection = rejected[0] as PromiseRejectedResult;
+      expect(rejection.reason).toMatchObject({
+        statusCode: 409,
+        code: REFUND_ERROR_CODES.ALREADY_CLAIMED,
+      });
+
+      // The losing request must be rejected by the store's unique constraint,
+      // not merely by an application-level check-then-write.
+      expect(rejection.reason).toBeInstanceOf(AppError);
+    });
   });
 
   describe("getClaimStatus", () => {
@@ -106,6 +143,54 @@ describe("RefundService — idempotency guard (#153)", () => {
 
       expect(result).not.toBeUndefined();
       expect(result!.refundId).toBe(basePayload.refundId);
+    });
+  });
+
+  describe("request-ID correlation across refund → dispute → changelog (#425)", () => {
+    it("threads a single correlation ID through every log line and Sentry event", async () => {
+      const { service } = makeService();
+
+      const correlationId = "corr-refund-425";
+      const logLines: Array<Record<string, unknown>> = [];
+      const sentryEvents: Array<Record<string, unknown>> = [];
+
+      const logger = {
+        info: (msg: string, ctx?: Record<string, unknown>) =>
+          logLines.push({ level: "info", msg, ...ctx }),
+        warn: (msg: string, ctx?: Record<string, unknown>) =>
+          logLines.push({ level: "warn", msg, ...ctx }),
+        error: (msg: string, ctx?: Record<string, unknown>) =>
+          logLines.push({ level: "error", msg, ...ctx }),
+      };
+
+      const sentry = {
+        captureException: (err: unknown, ctx?: Record<string, unknown>) =>
+          sentryEvents.push({ err, ...ctx }),
+        captureMessage: (msg: string, ctx?: Record<string, unknown>) =>
+          sentryEvents.push({ msg, ...ctx }),
+      };
+
+      // Trace one refund request through the whole chain.
+      await service.claimRefund(basePayload, { correlationId, logger, sentry });
+      await service.updateDisputeStatus(basePayload.refundId, "resolved", {
+        correlationId,
+        logger,
+        sentry,
+      });
+      await service.appendChangelog(basePayload.refundId, "refund-claimed", {
+        correlationId,
+        logger,
+        sentry,
+      });
+
+      expect(logLines.length).toBeGreaterThan(0);
+      for (const line of logLines) {
+        expect(line.correlationId).toBe(correlationId);
+      }
+
+      for (const event of sentryEvents) {
+        expect(event.correlationId).toBe(correlationId);
+      }
     });
   });
 

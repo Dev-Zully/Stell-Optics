@@ -30,6 +30,7 @@ import { ownershipTransferService } from "../services/ownership-transfer.service
 import { changelogService } from "../services/changelog.service";
 import { AppError } from "../middleware/errorHandler";
 import { sendCriticalAlert } from "../services/critical-alert.service";
+import { getRequestId } from "../middleware/requestLogger";
 
 export const transfersRouter = Router();
 
@@ -68,10 +69,13 @@ transfersRouter.post("/initiate", async (req: Request, res: Response) => {
     });
   }
 
+  const requestId = getRequestId(req);
+
   try {
     const transfer = await ownershipTransferService.initiateTransfer({
       ...parsed.data,
       fromOwner,
+      requestId,
     });
     return res.status(201).json({ transfer });
   } catch (err) {
@@ -81,11 +85,13 @@ transfersRouter.post("/initiate", async (req: Request, res: Response) => {
     Sentry.setTag("route", "transfers.initiate");
     Sentry.setTag("transferId", parsed.data.transferId);
     Sentry.setTag("escrowId", parsed.data.escrowId);
+    Sentry.setTag("requestId", requestId);
     Sentry.setContext("transfer", {
       transferId: parsed.data.transferId,
       escrowId: parsed.data.escrowId,
       fromOwner: parsed.data.fromOwner,
       toOwner: parsed.data.toOwner,
+      requestId,
       failureStep: "initiateTransfer",
     });
     throw err;
@@ -101,8 +107,14 @@ transfersRouter.post("/:transferId/accept", async (req: Request, res: Response) 
     });
   }
 
+  const requestId = getRequestId(req);
+
   try {
-    const transfer = await ownershipTransferService.acceptTransfer(req.params.transferId, actorId);
+    const transfer = await ownershipTransferService.acceptTransfer(
+      req.params.transferId,
+      actorId,
+      requestId,
+    );
     return res.json({ transfer });
   } catch (err) {
     if (err instanceof AppError) {
@@ -110,8 +122,10 @@ transfersRouter.post("/:transferId/accept", async (req: Request, res: Response) 
     }
     Sentry.setTag("route", "transfers.accept");
     Sentry.setTag("transferId", req.params.transferId);
+    Sentry.setTag("requestId", requestId);
     Sentry.setContext("transfer", {
       transferId: req.params.transferId,
+      requestId,
       failureStep: "acceptTransfer",
     });
     throw err;
@@ -127,8 +141,14 @@ transfersRouter.post("/:transferId/cancel", async (req: Request, res: Response) 
     });
   }
 
+  const requestId = getRequestId(req);
+
   try {
-    const transfer = await ownershipTransferService.cancelTransfer(req.params.transferId, actorId);
+    const transfer = await ownershipTransferService.cancelTransfer(
+      req.params.transferId,
+      actorId,
+      requestId,
+    );
     return res.json({ transfer });
   } catch (err) {
     if (err instanceof AppError) {
@@ -136,8 +156,10 @@ transfersRouter.post("/:transferId/cancel", async (req: Request, res: Response) 
     }
     Sentry.setTag("route", "transfers.cancel");
     Sentry.setTag("transferId", req.params.transferId);
+    Sentry.setTag("requestId", requestId);
     Sentry.setContext("transfer", {
       transferId: req.params.transferId,
+      requestId,
       failureStep: "cancelTransfer",
     });
     throw err;
