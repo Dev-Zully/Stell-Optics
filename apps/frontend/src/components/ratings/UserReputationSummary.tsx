@@ -1,8 +1,9 @@
 "use client";
 
 import { StarRating } from "./StarRating";
+import { useTranslation } from "react-i18next";
 import { ShieldCheck, ThumbsUp, Award } from "lucide-react";
-import type { UserReputationSummary as ReputationSummaryType } from "@/graphql/types";
+import type { UserReputationSummary as ReputationSummaryType } from "@/types/ratings";
 
 interface UserReputationSummaryProps {
   reputation?: ReputationSummaryType;
@@ -13,19 +14,33 @@ export function UserReputationSummary({
   reputation,
   compact = false,
 }: UserReputationSummaryProps) {
+  const { t } = useTranslation();
   const rep: ReputationSummaryType = reputation || {
     user_id: "default",
-    total_reviews: 28,
-    average_rating: 4.9,
-    five_star_count: 25,
-    four_star_count: 3,
+    total_reviews: 0,
+    average_rating: 0,
+    five_star_count: 0,
+    four_star_count: 0,
     three_star_count: 0,
     two_star_count: 0,
     one_star_count: 0,
-    positive_percentage: 100,
+    positive_percentage: 0,
   };
 
+  const hasReviews =
+    rep.total_reviews > 0 &&
+    typeof rep.average_rating === "number" &&
+    Number.isFinite(rep.average_rating);
+
   if (compact) {
+    if (!hasReviews) {
+      return (
+        <div className="flex items-center gap-2 bg-muted/40 border border-border px-2.5 py-1 rounded-full text-xs text-muted-foreground">
+          <span>No reviews yet</span>
+        </div>
+      );
+    }
+
     return (
       <div className="flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/20 px-2.5 py-1 rounded-full text-xs">
         <StarRating rating={rep.average_rating} size="sm" />
@@ -37,16 +52,36 @@ export function UserReputationSummary({
     );
   }
 
+  if (!hasReviews) {
+    return (
+      <div className="space-y-4 rounded-2xl border bg-card p-5 shadow-sm">
+        <div className="flex items-center justify-between border-b pb-3">
+          <div className="flex items-center gap-2">
+            <Award className="h-5 w-5 text-yellow-500" />
+            <h3 className="text-base font-semibold text-foreground">Reputation & Trust Score</h3>
+          </div>
+        </div>
+        <div className="flex flex-col items-center justify-center gap-2 py-6 text-center">
+          <StarRating rating={0} size="sm" />
+          <span className="text-sm font-medium text-foreground">No reviews yet</span>
+          <span className="text-xs text-muted-foreground">
+            This user hasn&apos;t received any reviews.
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 rounded-2xl border bg-card p-5 shadow-sm">
       <div className="flex items-center justify-between border-b pb-3">
         <div className="flex items-center gap-2">
           <Award className="h-5 w-5 text-yellow-500" />
-          <h3 className="text-base font-semibold text-foreground">Reputation & Trust Score</h3>
+          <h3 className="text-base font-semibold text-foreground">{t("ratings.reputation")}</h3>
         </div>
         <div className="flex items-center gap-1 text-xs font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full">
           <ShieldCheck className="h-3.5 w-3.5" />
-          <span>Verified Trader</span>
+          <span>{t("ratings.verifiedTrader")}</span>
         </div>
       </div>
 
@@ -57,7 +92,7 @@ export function UserReputationSummary({
           </span>
           <StarRating rating={rep.average_rating} size="sm" className="mt-1" />
           <span className="text-xs text-muted-foreground mt-1">
-            Based on {rep.total_reviews} reviews
+            {t("ratings.basedOn", { count: rep.total_reviews })}
           </span>
         </div>
 
@@ -67,7 +102,7 @@ export function UserReputationSummary({
             <span>{rep.positive_percentage}%</span>
           </div>
           <span className="text-xs text-muted-foreground mt-1">
-            Positive Feedback Rate
+            {t("ratings.positiveRate")}
           </span>
         </div>
 
