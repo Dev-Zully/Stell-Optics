@@ -95,6 +95,127 @@ registerRoute({
   },
 });
 
+// Zod schemas for the review creation route.
+const createReviewBodySchema = z.object({
+  revieweeId: z.string().describe("The user being reviewed"),
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().optional(),
+});
+
+const createReviewResponseSchema = z.object({
+  success: z.boolean(),
+  reviewId: z.string().optional(),
+});
+
+const createReviewErrorSchema = z.object({
+  error: z.string(),
+});
+
+const INSERT_REVIEW = `
+  mutation InsertReview(
+    $reviewerId: uuid!
+    $revieweeId: uuid!
+    $rating: Int!
+    $comment: String
+  ) {
+    insert_reviews_one(
+      object: {
+        reviewer_id: $reviewerId
+        reviewee_id: $revieweeId
+        rating: $rating
+        comment: $comment
+      }
+    ) {
+      id
+    }
+  }
+`;
+
+interface InsertReviewResult {
+  insert_reviews_one: {
+    id: string;
+  } | null;
+}
+
+registerRoute({
+  method: "post",
+  path: "/api/users/reviews",
+  summary: "Create a review for another user",
+  description:
+    "Creates a review. A user cannot review themselves; self-reviews are rejected with 400.",
+  request: {
+    headers: z.object({
+      authorization: z.string().describe("Bearer <Firebase ID token>"),
+    }),
+    body: { content: { "application/json": { schema: createReviewBodySchema } } },
+  },
+  responses: {
+    201: {
+      description: "Review created",
+      content: { "application/json": { schema: createReviewResponseSchema } },
+    },
+    400: {
+      description: "Invalid request or self-review attempt",
+      content: { "application/json": { schema: createReviewErrorSchema } },
+    },
+    401: {
+      description: "Missing, invalid, or expired token",
+      content: { "application/json": { schema: createReviewErrorSchema } },
+    },
+    502: {
+      description: "Failed to persist review",
+      content: { "application/json": { schema: createReviewErrorSchema } },
+    },
+  },
+});
+
+usersRouter.post("/reviews", async (req, res) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Authorization header is required" });
+  }
+
+  const token = authHeader.slice("Bearer ".length);
+
+  let decoded;
+  try {
+    decoded = await firebaseAuth.verifyIdToken(token);
+  } catch (error) {
+    console.error("create-review: token verification failed", error);
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+
+  const parsed = createReviewBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid review payload" });
+  }
+
+  const { revieweeId, rating, comment } = parsed.data;
+
+  // Self-review guard: reject before any Hasura/DB write so no row is created.
+  if (revieweeId === decoded.uid) {
+    return res.status(400).json({ error: "You cannot review yourself" });
+  }
+
+  try {
+    const result = await hasuraRequest<InsertReviewResult>(INSERT_REVIEW, {
+      reviewerId: decoded.uid,
+      revieweeId,
+      rating,
+      comment: comment ?? null,
+    });
+
+    return res.status(201).json({
+      success: true,
+      reviewId: result.insert_reviews_one?.id,
+    });
+  } catch (error) {
+    console.error("create-review: hasura insert failed", error);
+    return res.status(502).json({ error: "Failed to persist review" });
+  }
+});
+
 usersRouter.delete("/me", async (req, res) => {
   const authHeader = req.headers.authorization;
 

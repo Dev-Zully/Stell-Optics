@@ -24,6 +24,51 @@
  *   - "ENTRY_APPENDED"  — new entry written
  *   - "ENTRY_REMOVED"   — entry deleted
  * Consumers (e.g. audit-log forwarders) register via `onEvent`.
+ *
+ * Growth management / archival plan (issue #432)
+ * ----------------------------------------------
+ * The changelog is append-only, so it grows without bound. The documented
+ * plan (implementation deferred) is:
+ *
+ *  1. Age thresholds
+ *     - HOT:  entries younger than `CHANGELOG_HOT_RETENTION_DAYS` (90 days)
+ *             stay in the primary store and serve the normal query path.
+ *     - WARM: entries between the hot threshold and
+ *             `CHANGELOG_COLD_ARCHIVE_AFTER_DAYS` (365 days) remain
+ *             queryable but are candidates for the next archival run.
+ *     - COLD: entries older than the cold threshold are exported to cold
+ *             storage (object storage / archive table) and pruned from the
+ *             hot store.
+ *
+ *  2. Archival approach
+ *     - Time-based partitioning of the hot table by month, so pruning is a
+ *       partition drop rather than a row-by-row delete.
+ *     - A periodic export job copies each eligible partition to cold storage
+ *       as immutable, checksummed batches (one manifest per partition) before
+ *       the partition is detached. Export is idempotent and keyed by
+ *       partition id, so a retried run cannot duplicate archived data.
+ *
+ *  3. Retention and query fallback
+ *     - Archived entries are retained indefinitely; only their storage tier
+ *       changes.
+ *     - Reads for a resource first hit the hot store. If the requested range
+ *       predates the hot window, the service falls back to the cold archive
+ *       and merges results, preserving chronological ordering and the
+ *       existing pagination contract (`limit` / `offset` / `hasMore`).
+ *     - `removeEntry` on an archived entry is not supported in the hot path;
+ *       corrections for archived entries are recorded as new entries.
+ *
+ *  4. Future scheduled archival job (outline)
+ *     - Runs on a schedule (e.g. daily), guarded by a distributed lock so
+ *       only one instance archives at a time.
+ *     - Selects partitions whose newest entry is older than the cold
+ *       threshold, exports them, verifies the manifest, then drops the
+ *       partition from the hot store.
+ *     - Emits an "ARCHIVAL_COMPLETED" style operational event/metric per run
+ *       (entries archived, bytes written, partitions dropped) so operators
+ *       can alert on failures.
+ *     - Failures are non-destructive: a partition is only dropped after a
+ *       verified export, so a failed run simply retries next cycle.
  */
 
 import { AppError } from "../middleware/errorHandler";
@@ -80,6 +125,17 @@ export interface ChangelogPage {
 export const DEFAULT_CHANGELOG_PAGE_SIZE = 50;
 /** Hard cap so a single response can never be unbounded. */
 export const MAX_CHANGELOG_PAGE_SIZE = 200;
+
+/**
+ * Growth-management thresholds (issue #432).
+ *
+ * Entries younger than `CHANGELOG_HOT_RETENTION_DAYS` are served from the hot
+ * store; entries older than `CHANGELOG_COLD_ARCHIVE_AFTER_DAYS` are eligible
+ * for export to cold storage and pruning from the hot store. See the module
+ * documentation for the full archival plan.
+ */
+export const CHANGELOG_HOT_RETENTION_DAYS = 90;
+export const CHANGELOG_COLD_ARCHIVE_AFTER_DAYS = 365;
 
 export const CHANGELOG_ERROR_CODES = {
   UPDATE_FORBIDDEN: "CHANGELOG_UPDATE_FORBIDDEN",
