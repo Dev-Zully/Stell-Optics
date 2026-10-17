@@ -28,7 +28,7 @@ import { env } from "../config/env";
 import { captureRawBody } from "../middleware/rawBody";
 import { HasuraService } from "../services/hasura.service";
 import { NotificationService } from "../services/notification.service";
-import { webhookRouter } from "./webhooks";
+import { webhookRouter, STATUS_MAP } from "./webhooks";
 import { Sentry } from "../lib/sentry";
 
 const updateEscrowStatus = HasuraService.updateEscrowStatus as jest.Mock;
@@ -57,6 +57,48 @@ const payload = JSON.stringify({
   contractId: "contract-123",
   engagementId: "ENG-001",
   status: "completed",
+});
+
+// Canonical list of every escrow status Trustless Work documents as deliverable
+// via the escrow-status webhook. Sourced from Trustless Work's API docs
+// (escrow lifecycle statuses plus the aliases they emit in webhook payloads).
+// If Trustless Work adds a status, add it here and to STATUS_MAP in webhooks.ts;
+// this test fails otherwise so a legitimate delivery can never be silently
+// rejected with a 400 (and retried forever).
+const DOCUMENTED_TRUSTLESS_WORK_STATUSES = [
+  // Canonical escrow lifecycle statuses.
+  "created",
+  "funded",
+  "completed",
+  "disputed",
+  "released",
+  "cancelled",
+  "refunded",
+  // Aliases Trustless Work emits in webhook payloads.
+  "ACTIVE",
+  "PENDING",
+  "COMPLETE",
+  "CANCELLED",
+  "DISPUTED",
+  "RELEASED",
+  "REFUNDED",
+] as const;
+
+describe("STATUS_MAP coverage", () => {
+  it("maps every documented Trustless Work escrow status", () => {
+    const missing = DOCUMENTED_TRUSTLESS_WORK_STATUSES.filter(
+      (status) => !(status in STATUS_MAP)
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("maps every documented status to a non-empty string", () => {
+    for (const status of DOCUMENTED_TRUSTLESS_WORK_STATUSES) {
+      expect(typeof STATUS_MAP[status]).toBe("string");
+      expect(STATUS_MAP[status].length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("POST /webhooks/escrow-status", () => {
@@ -131,6 +173,56 @@ describe("POST /webhooks/escrow-status", () => {
 
     expect(res.status).toBe(401);
     expect(updateEscrowStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects a tampered payload that carries a valid signature for different bytes", async () => {
+    // Sign payload A...
+    const signedBody = JSON.stringify({
+      contractId: "contract-123",
+      engagementId: "ENG-001",
+      status: "completed",
+    });
+    const signatureForA = sign(signedBody);
+
+    // ...but send payload B (a different status) with A's signature.
+    const tamperedBody = JSON.stringify({
+      contractId: "contract-123",
+      engagementId: "ENG-001",
+      status: "released",
+    });
+    expect(tamperedBody).not.toBe(signedBody);
+
+    const res = await post(tamperedBody, {
+      "x-trustless-work-signature": signatureForA,
+    });
+
+    expect(res.status).toBe(401);
+    expect(updateEscrowStatus).not.toHaveBeenCalled();
+    expect(notifyEscrowStatusChange).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payload whose bytes were modified after signing", async () => {
+    // Sign the exact bytes that will be sent...
+    const signedBody = JSON.stringify({
+      contractId: "contract-123",
+      engagementId: "ENG-001",
+      status: "completed",
+    });
+    const signature = sign(signedBody);
+
+    // ...then mutate the raw bytes (extra whitespace) while keeping the signature.
+    // A re-serialized/re-parsed body would normalize this away, so a 401 here
+    // proves verification runs against the raw captured bytes.
+    const tamperedBody = `${signedBody} `;
+    expect(tamperedBody).not.toBe(signedBody);
+
+    const res = await post(tamperedBody, {
+      "x-trustless-work-signature": signature,
+    });
+
+    expect(res.status).toBe(401);
+    expect(updateEscrowStatus).not.toHaveBeenCalled();
+    expect(notifyEscrowStatusChange).not.toHaveBeenCalled();
   });
 
   it("fails closed with 500 when the webhook secret is not configured", async () => {
