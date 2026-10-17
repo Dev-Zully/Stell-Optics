@@ -14,6 +14,7 @@
 import * as Sentry from "@sentry/node";
 import { env } from "../config/env";
 import { logger } from "./logger";
+import { getRequestId } from "./requestLogger";
 
 export function initSentry(): void {
   if (!env.SENTRY_DSN) {
@@ -24,6 +25,17 @@ export function initSentry(): void {
     dsn: env.SENTRY_DSN,
     environment: env.NODE_ENV,
     tracesSampleRate: env.NODE_ENV === "production" ? 0.1 : 0,
+    // Attach the current request correlation ID (from AsyncLocalStorage) to
+    // every event so Sentry events share the same ID as the log lines across
+    // the refund→dispute→changelog chain (#425).
+    beforeSend(event) {
+      const requestId = getRequestId();
+      if (requestId) {
+        event.tags = { ...event.tags, requestId };
+        event.extra = { ...event.extra, requestId };
+      }
+      return event;
+    },
   });
 }
 
@@ -41,20 +53,23 @@ export async function alertCriticalFailure(
   message: string,
   context: Record<string, unknown> = {},
 ): Promise<void> {
+  const requestId = getRequestId();
+
   const payload = {
     kind,
     message,
     context,
     environment: env.NODE_ENV,
     timestamp: new Date().toISOString(),
+    ...(requestId ? { requestId } : {}),
   };
 
   logger.error(`[CRITICAL_ALERT] ${kind} failure: ${message}`, payload);
 
   Sentry.captureMessage(`[CRITICAL_ALERT] ${kind} failure: ${message}`, {
     level: "fatal",
-    tags: { alert: "critical", kind },
-    extra: context,
+    tags: { alert: "critical", kind, ...(requestId ? { requestId } : {}) },
+    extra: { ...context, ...(requestId ? { requestId } : {}) },
   });
 
   const webhookUrl = env.CRITICAL_ALERT_WEBHOOK_URL;
@@ -77,39 +92,46 @@ export async function alertCriticalFailure(
 }
 
 /**
- * Low-balance alert for the dispute-resolver wallet (#420).
+ * Dedicated alert for notification-delivery failure paths (#408).
  *
- * Emitted by the periodic balance monitor when the wallet's on-chain balance
- * drops below the configured threshold, so operators are warned *before* a
- * refund fails. Follows the same conventions as `alertCriticalFailure`: a
- * stable `[LOW_BALANCE_ALERT]` tag, a Sentry message, and delivery to the
- * operational alert webhook when configured. Never throws.
+ * Distinct from the general Sentry error stream: it is tagged as a
+ * notification-delivery alert, logged at `error` level with a stable
+ * `[NOTIFICATION_DELIVERY_FAILURE]` prefix, and pushed to the operational
+ * alert webhook (Slack/PagerDuty/etc.) when `CRITICAL_ALERT_WEBHOOK_URL` is
+ * set. Never throws — alerting must not mask the original failure.
  */
-export async function alertLowDisputeResolverBalance(
-  address: string,
-  balance: string,
-  threshold: string,
+export async function alertNotificationDeliveryFailure(
+  notificationType: string,
+  reason: "transient_exhausted" | "permanent",
+  message: string,
   context: Record<string, unknown> = {},
 ): Promise<void> {
-  const message = `dispute-resolver wallet ${address} balance ${balance} is below threshold ${threshold}`;
   const payload = {
-    kind: "low_balance",
-    address,
-    balance,
-    threshold,
+    notificationType,
+    reason,
     message,
     context,
     environment: env.NODE_ENV,
     timestamp: new Date().toISOString(),
   };
 
-  logger.warn(`[LOW_BALANCE_ALERT] ${message}`, payload);
+  logger.error(
+    `[NOTIFICATION_DELIVERY_FAILURE] ${notificationType} (${reason}): ${message}`,
+    payload,
+  );
 
-  Sentry.captureMessage(`[LOW_BALANCE_ALERT] ${message}`, {
-    level: "warning",
-    tags: { alert: "low_balance", kind: "low_balance" },
-    extra: { address, balance, threshold, ...context },
-  });
+  Sentry.captureMessage(
+    `[NOTIFICATION_DELIVERY_FAILURE] ${notificationType} (${reason}): ${message}`,
+    {
+      level: "error",
+      tags: {
+        alert: "notification_delivery_failure",
+        notificationType,
+        reason,
+      },
+      extra: context,
+    },
+  );
 
   const webhookUrl = env.CRITICAL_ALERT_WEBHOOK_URL;
   if (!webhookUrl) {
@@ -121,13 +143,46 @@ export async function alertLowDisputeResolverBalance(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text: `:warning: LOW BALANCE dispute-resolver wallet ${address}: ${balance} (threshold ${threshold})`,
+        text: `:warning: NOTIFICATION DELIVERY FAILURE ${notificationType} (${reason}): ${message}`,
         ...payload,
       }),
     });
   } catch (err) {
-    logger.error("[LOW_BALANCE_ALERT] failed to deliver alert", { err, payload });
+    logger.error(
+      "[NOTIFICATION_DELIVERY_FAILURE] failed to deliver alert",
+      { err, payload },
+    );
   }
 }
 
 export { Sentry };
+
+/**
+ * Correlation-aware Sentry helpers (#425).
+ *
+ * These wrap the SDK capture calls so the current request correlation ID is
+ * always attached as a tag/extra, even when `beforeSend` isn't invoked (e.g.
+ * when Sentry is not initialized). Prefer these over calling `Sentry.*`
+ * directly on the refund→dispute→changelog path.
+ */
+export function captureException(
+  error: unknown,
+  context: Record<string, unknown> = {},
+): void {
+  const requestId = getRequestId();
+  Sentry.captureException(error, {
+    tags: requestId ? { requestId } : undefined,
+    extra: { ...context, ...(requestId ? { requestId } : {}) },
+  });
+}
+
+export function captureMessage(
+  message: string,
+  context: Record<string, unknown> = {},
+): void {
+  const requestId = getRequestId();
+  Sentry.captureMessage(message, {
+    tags: requestId ? { requestId } : undefined,
+    extra: { ...context, ...(requestId ? { requestId } : {}) },
+  });
+}

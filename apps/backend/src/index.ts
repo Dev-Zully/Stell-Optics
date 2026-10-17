@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express, { type Express } from "express";
 import { env } from "./config/env";
+import { assertNetworkConfigMatches } from "./config/networkCheck";
 import { logger } from "./lib/logger";
 import { initSentry, Sentry } from "./lib/sentry";
 import { requestLogger } from "./middleware/requestLogger";
@@ -20,8 +21,6 @@ import { changelogRouter } from "./routes/changelog";
 import { disputesRouter } from "./routes/disputes";
 // Issue #240 — account deletion / anonymization
 import { usersRouter } from "./routes/users";
-// Issue #420 — dispute-resolver wallet balance monitoring
-import { startDisputeResolverBalanceMonitor } from "./services/disputeResolverBalanceMonitor";
 
 export function createApp(): Express {
   const app = express();
@@ -54,6 +53,10 @@ export function createApp(): Express {
 export const app = createApp();
 
 if (require.main === module) {
+  // Fail fast if the frontend and backend are configured for different Stellar
+  // networks (e.g. frontend on testnet, backend refunds on mainnet).
+  assertNetworkConfigMatches();
+
   app.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, "TrueStub backend listening");
 

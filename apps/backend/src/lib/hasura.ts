@@ -1,17 +1,31 @@
 import { env } from "../config/env";
+import { queryWithTimeout } from "./postgres";
 
 interface HasuraResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;
 }
 
+export interface HasuraRequestOptions {
+  /**
+   * Correlation ID for the originating request. When omitted, the ID from the
+   * active request context (if any) is used so status updates in the
+   * refund→dispute→changelog chain stay traceable.
+   */
+  requestId?: string;
+}
+
 export interface HasuraClient {
-  request<T>(query: string, variables?: Record<string, unknown>): Promise<T>;
+  request<T>(
+    query: string,
+    variables?: Record<string, unknown>,
+    options?: HasuraRequestOptions
+  ): Promise<T>;
 }
 
 function requireHasuraConfig(): { url: string; adminSecret: string } {
   const url = env.HASURA_GRAPHQL_URL;
-  const adminSecret = env.HASURA_GRAPHQL_ADMIN_SECRET;
+  const adminSecret = env.HASURA_ADMIN_SECRET;
 
   if (!url || !adminSecret) {
     throw new Error(
@@ -31,24 +45,36 @@ function requireHasuraConfig(): { url: string; adminSecret: string } {
  */
 export function createHasuraClient(): HasuraClient {
   return {
-    async request<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+    async request<T>(
+      query: string,
+      variables: Record<string, unknown> = {},
+      options: HasuraRequestOptions = {}
+    ): Promise<T> {
       const { url, adminSecret } = requireHasuraConfig();
+      const requestId = options.requestId ?? getRequestId();
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "x-hasura-admin-secret": adminSecret,
+      };
+      if (requestId) {
+        headers["x-request-id"] = requestId;
+      }
+
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-hasura-admin-secret": adminSecret,
-        },
+        headers,
         body: JSON.stringify({ query, variables }),
       });
 
       const json = (await response.json()) as HasuraResponse<T>;
       if (!response.ok || json.errors?.length) {
         const detail = json.errors?.map(({ message }) => message).join("; ") ?? response.statusText;
-        throw new Error(`Hasura request failed: ${detail}`);
+        const context = requestId ? ` (requestId=${requestId})` : "";
+        throw new Error(`Hasura request failed${context}: ${detail}`);
       }
       if (json.data === undefined) {
-        throw new Error("Hasura request returned no data");
+        const context = requestId ? ` (requestId=${requestId})` : "";
+        throw new Error(`Hasura request returned no data${context}`);
       }
       return json.data;
     },
@@ -59,7 +85,67 @@ export const hasuraClient = createHasuraClient();
 
 export async function hasuraRequest<T>(
   query: string,
-  variables: Record<string, unknown> = {}
+  variables: Record<string, unknown> = {},
+  options: HasuraRequestOptions = {}
 ): Promise<T> {
-  return hasuraClient.request<T>(query, variables);
+  return hasuraClient.request<T>(query, variables, options);
+}
+
+export interface EscrowStatusRow {
+  id: string;
+  contract_id: string;
+  status: string;
+  updated_at: string;
+}
+
+interface EscrowStatusQueryResult {
+  escrow_transactions: EscrowStatusRow[];
+}
+
+/**
+ * Fetches a sample of recent escrow transactions from Hasura so their stored
+ * status can be reconciled against Trustless Work's live state.
+ *
+ * This is a read-only helper used by the reconciliation job; it does not touch
+ * the webhook write path that remains the single authoritative writer of
+ * `escrow_transactions.status`.
+ */
+export async function fetchRecentEscrowStatuses(
+  limit = 50,
+  options: HasuraRequestOptions = {}
+): Promise<EscrowStatusRow[]> {
+  const query = `
+    query RecentEscrowStatuses($limit: Int!) {
+      escrow_transactions(order_by: { updated_at: desc }, limit: $limit) {
+        id
+        contract_id
+        status
+        updated_at
+      }
+    }
+  `;
+
+  const data = await hasuraRequest<EscrowStatusQueryResult>(query, { limit }, options);
+  return data.escrow_transactions ?? [];
+}
+
+/**
+ * Fetches recent escrow statuses directly from Postgres over `DATABASE_URL`.
+ *
+ * Uses the shared pool in `./postgres`, which applies explicit pool size,
+ * idle timeout, connection timeout, and statement timeout settings rather
+ * than relying on driver defaults. Prefer this over the Hasura GraphQL path
+ * when a direct connection is available.
+ */
+export async function fetchRecentEscrowStatusesFromPostgres(
+  limit = 50
+): Promise<EscrowStatusRow[]> {
+  const result = await queryWithTimeout<EscrowStatusRow>(
+    `SELECT id, contract_id, status, updated_at
+       FROM escrow_transactions
+      ORDER BY updated_at DESC
+      LIMIT $1`,
+    [limit]
+  );
+  return result.rows ?? [];
 }

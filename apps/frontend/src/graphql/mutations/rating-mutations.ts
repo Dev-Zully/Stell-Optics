@@ -11,6 +11,7 @@ export const INSERT_REVIEW = gql`
       rating
       comment
       role
+      moderation_status
       created_at
     }
   }
