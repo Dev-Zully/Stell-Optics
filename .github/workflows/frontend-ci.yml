@@ -33,6 +33,66 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Lint wiring TODOs
+        run: |
+          set -euo pipefail
+
+          MARKER='// TODO: Replace with actual API call'
+          ISSUE_RE='#[0-9]+|issue'
+
+          # Determine the base ref to diff against. For pull_request events,
+          # compare against the merge base with the target branch.
+          BASE_REF=""
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}" || true
+            BASE_REF="origin/${GITHUB_BASE_REF}"
+          fi
+
+          if [ -n "$BASE_REF" ] && git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
+            CHANGED_FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_REF"...HEAD -- 'apps/frontend/**/*.ts' 'apps/frontend/**/*.tsx' 'apps/frontend/**/*.js' 'apps/frontend/**/*.jsx' || true)
+          else
+            # Fallback: scan all tracked frontend source files.
+            CHANGED_FILES=$(git ls-files 'apps/frontend/**/*.ts' 'apps/frontend/**/*.tsx' 'apps/frontend/**/*.js' 'apps/frontend/**/*.jsx' || true)
+          fi
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No changed frontend source files to check for wiring TODOs."
+            exit 0
+          fi
+
+          FAILED=0
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            [ -f "$file" ] || continue
+
+            # Find line numbers containing the exact marker.
+            MATCH_LINES=$(grep -nF -- "$MARKER" "$file" | cut -d: -f1 || true)
+            [ -z "$MATCH_LINES" ] && continue
+
+            while IFS= read -r lineno; do
+              [ -z "$lineno" ] && continue
+
+              # Check the same line and the immediately following line for an issue reference.
+              SAME_LINE=$(sed -n "${lineno}p" "$file")
+              NEXT_LINE=$(sed -n "$((lineno + 1))p" "$file")
+
+              if echo "$SAME_LINE" | grep -Eq "$ISSUE_RE" || echo "$NEXT_LINE" | grep -Eq "$ISSUE_RE"; then
+                continue
+              fi
+
+              echo "::warning file=${file},line=${lineno}::Wiring TODO without a linked issue reference. Add an issue number (e.g. #123) or the word 'issue' on the same or next line."
+              FAILED=1
+            done <<< "$MATCH_LINES"
+          done <<< "$CHANGED_FILES"
+
+          if [ "$FAILED" -ne 0 ]; then
+            echo "One or more wiring TODOs lack a linked issue reference."
+            exit 1
+          fi
+
+          echo "All wiring TODOs reference an issue."
+
       - name: Lint frontend
         run: yarn workspace @truestub/frontend lint
 
@@ -41,6 +101,42 @@ jobs:
 
       - name: Test frontend
         run: yarn workspace @truestub/frontend test:ci
+
+      - name: Build frontend
+        run: yarn workspace @truestub/frontend build
+
+      - name: Bundle size budget
+        run: |
+          set -euo pipefail
+
+          # Budget in kilobytes for the built frontend output.
+          BUDGET_KB=5000
+          # Allow a small tolerance (in KB) before failing.
+          TOLERANCE_KB=50
+
+          DIST_DIR="apps/frontend/.next"
+          if [ ! -d "$DIST_DIR" ]; then
+            DIST_DIR="apps/frontend/dist"
+          fi
+
+          if [ ! -d "$DIST_DIR" ]; then
+            echo "::warning::Could not find a built output directory (.next or dist); skipping bundle size check."
+            exit 0
+          fi
+
+          # Measure the size of the built output in kilobytes.
+          SIZE_KB=$(du -sk "$DIST_DIR" | cut -f1)
+          LIMIT_KB=$((BUDGET_KB + TOLERANCE_KB))
+
+          echo "Bundle size: ${SIZE_KB} KB (budget: ${BUDGET_KB} KB, tolerance: ${TOLERANCE_KB} KB)"
+
+          if [ "$SIZE_KB" -gt "$LIMIT_KB" ]; then
+            echo "::warning::Bundle size ${SIZE_KB} KB exceeds budget of ${BUDGET_KB} KB (limit ${LIMIT_KB} KB including tolerance)."
+            echo "Bundle size regression detected: ${SIZE_KB} KB > ${LIMIT_KB} KB limit."
+            exit 1
+          fi
+
+          echo "Bundle size within budget."
 
   secret-scan:
     name: Secret scanning

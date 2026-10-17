@@ -68,7 +68,7 @@
 
 import { AppError } from "../middleware/errorHandler";
 import { ChangelogService } from "./changelog.service";
-import { CHANGELOG_ENTRY_TYPES, DISPUTE_EVENT_ENTRY_TYPES } from "./changelog-taxonomy";
+import { getRequestId } from "../middleware/requestLogger";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -306,17 +306,13 @@ export class DisputeService {
 
     await this.store.set(disputeId, dispute);
 
-    // Best-effort audit entry for the opening of the dispute (taxonomy #416).
-    try {
-      await this.changelog.appendEntry({
-        entryId: `${CHANGELOG_ENTRY_TYPES.DISPUTE_RAISED}:${disputeId}`,
-        action: CHANGELOG_ENTRY_TYPES.DISPUTE_RAISED,
-        actorId: raisedBy,
-        resourceId: disputeId,
-        metadata: { escrowId, fromState: null, toState: "OPEN", reason },
-      });
-    } catch {
-      // Changelog is best-effort; the dispute was already persisted.
+    // Correlation: every log line / changelog entry produced while handling
+    // this request carries the originating request ID (issue #425).
+    const requestId = getRequestId();
+    if (requestId) {
+      console.info(
+        `[dispute] opened disputeId=${disputeId} escrowId=${escrowId} requestId=${requestId}`
+      );
     }
 
     return dispute;
@@ -388,6 +384,19 @@ export class DisputeService {
 
     await this.store.set(disputeId, updated);
 
+    // Correlation: capture the originating request ID once and thread it
+    // through both the log line and the changelog entry so a support
+    // investigation for one refund can find every related record
+    // (issue #425).
+    const requestId = getRequestId();
+
+    if (requestId) {
+      console.info(
+        `[dispute] transition disputeId=${disputeId} event=${event} ` +
+          `from=${dispute.state} to=${nextState} requestId=${requestId}`
+      );
+    }
+
     // Write-once audit trail (issues #155 / #314). Audit logging must never
     // block or roll back the transition, so failures are swallowed after the
     // dispute has been persisted.
@@ -402,6 +411,7 @@ export class DisputeService {
           escrowId: dispute.escrowId,
           fromState: dispute.state,
           toState: nextState,
+          ...(requestId ? { requestId } : {}),
           ...(opts?.resolution ? { resolution: opts.resolution } : {}),
         },
       });

@@ -18,7 +18,8 @@
     "migrate:create": "yarn migrate create",
     "test": "jest --runInBand",
     "test:ci": "jest --ci --coverage --runInBand",
-    "loadtest:webhooks": "k6 run loadtest/webhooks.loadtest.js"
+    "loadtest:webhooks": "k6 run loadtest/webhooks.loadtest.js",
+    "simulate:webhook": "tsx scripts/simulate-webhook.ts"
   },
   "dependencies": {
     "@sentry/node": "^8.55.0",

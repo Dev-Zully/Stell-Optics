@@ -1,0 +1,284 @@
+name: Security and Deploy Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  production-error-response-check:
+    name: Production error response leaks no stack trace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install backend dependencies
+        working-directory: apps/backend
+        run: yarn install --frozen-lockfile
+
+      - name: Start backend in production mode
+        working-directory: apps/backend
+        env:
+          NODE_ENV: production
+          PORT: '4000'
+        run: |
+          yarn build || true
+          nohup yarn start > backend.log 2>&1 &
+          echo $! > backend.pid
+
+      - name: Wait for backend to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/health > /dev/null; then
+              echo "Backend is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become ready in time"
+          cat apps/backend/backend.log || true
+          exit 1
+
+      - name: Trigger error routes and assert no stack trace leaks
+        run: |
+          set -euo pipefail
+
+          ROUTES=(
+            "/nonexistent-route-442"
+            "/error"
+            "/api/error"
+            "/graphql"
+          )
+
+          FAILED=0
+
+          for route in "${ROUTES[@]}"; do
+            echo "== Checking ${route} =="
+            BODY_FILE="$(mktemp)"
+            STATUS="$(curl -s -o "${BODY_FILE}" -w '%{http_code}' "http://localhost:4000${route}" || true)"
+            echo "HTTP status: ${STATUS}"
+            echo "Response body:"
+            cat "${BODY_FILE}" || true
+            echo
+
+            if grep -Eqi 'at [A-Za-z0-9_$.]+ \(' "${BODY_FILE}"; then
+              echo "::error::Stack trace detected in response for ${route}"
+              FAILED=1
+            fi
+
+            if grep -Eqi 'Error:.*\n.*at ' "${BODY_FILE}"; then
+              echo "::error::Stack trace detected in response for ${route}"
+              FAILED=1
+            fi
+
+            if grep -Eq '/[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+\.(ts|js|tsx|jsx)' "${BODY_FILE}"; then
+              echo "::error::Internal file path detected in response for ${route}"
+              FAILED=1
+            fi
+
+            if grep -Eqi 'node_modules' "${BODY_FILE}"; then
+              echo "::error::Internal file path (node_modules) detected in response for ${route}"
+              FAILED=1
+            fi
+
+            if grep -Eqi 'stack' "${BODY_FILE}"; then
+              echo "::error::Stack trace field detected in response for ${route}"
+              FAILED=1
+            fi
+
+            rm -f "${BODY_FILE}"
+          done
+
+          if [ "${FAILED}" -ne 0 ]; then
+            echo "Production error responses leaked internal details."
+            exit 1
+          fi
+
+          echo "No stack traces or internal file paths leaked."
+
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f apps/backend/backend.pid ]; then
+            kill "$(cat apps/backend/backend.pid)" || true
+          fi
+
+      - name: Upload backend logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-production-logs
+          path: apps/backend/backend.log
+          if-no-files-found: ignore
+
+  frontend-secret-scan:
+    name: Frontend build contains no backend-only secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: apps/frontend
+        run: yarn install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: apps/frontend
+        env:
+          NODE_ENV: production
+        run: yarn build
+
+      - name: Scan built frontend bundle for backend-only secret names
+        run: |
+          set -euo pipefail
+
+          BUILD_DIR="apps/frontend/.next"
+
+          if [ ! -d "${BUILD_DIR}" ]; then
+            echo "::error::Frontend build output directory ${BUILD_DIR} not found"
+            exit 1
+          fi
+
+          SECRET_NAMES=(
+            "HASURA_GRAPHQL_ADMIN_SECRET"
+            "DATABASE_URL"
+            "JWT_SECRET"
+            "HASURA_ADMIN_SECRET"
+            "POSTGRES_PASSWORD"
+            "BACKEND_HEALTH_URL"
+            "SESSION_SECRET"
+          )
+
+          FAILED=0
+
+          for secret in "${SECRET_NAMES[@]}"; do
+            echo "== Scanning for ${secret} =="
+            if grep -rIl --exclude-dir=cache "${secret}" "${BUILD_DIR}"; then
+              echo "::error::Backend-only secret name '${secret}' found in frontend build output"
+              FAILED=1
+            fi
+          done
+
+          if [ "${FAILED}" -ne 0 ]; then
+            echo "Frontend build leaked backend-only secret names."
+            exit 1
+          fi
+
+          echo "No backend-only secret names found in frontend build output."
+
+  docker-smoke-test:
+    name: Backend Docker image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend Docker image
+        run: |
+          docker build -t backend-smoke-test:ci -f apps/backend/Dockerfile apps/backend
+
+      - name: Run backend container
+        run: |
+          docker run -d --name backend-smoke-test \
+            -e NODE_ENV=production \
+            -e PORT=4000 \
+            -p 4000:4000 \
+            backend-smoke-test:ci
+
+      - name: Wait for /health and verify healthy response
+        run: |
+          set -euo pipefail
+
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/health > /tmp/health.json; then
+              echo "Health response:"
+              cat /tmp/health.json
+              echo
+              if grep -Eqi '"status"[[:space:]]*:[[:space:]]*"ok"' /tmp/health.json || grep -Eqi '"status"[[:space:]]*:[[:space:]]*"healthy"' /tmp/health.json; then
+                echo "Containerized backend is healthy."
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+
+          echo "::error::Containerized backend did not serve a healthy /health response"
+          docker logs backend-smoke-test || true
+          exit 1
+
+      - name: Dump container logs
+        if: always()
+        run: docker logs backend-smoke-test || true
+
+      - name: Stop and remove container
+        if: always()
+        run: |
+          docker stop backend-smoke-test || true
+          docker rm backend-smoke-test || true
+
+  deployment-freshness:
+    name: Deployment freshness check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare deployed commit against latest main
+        env:
+          BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BACKEND_HEALTH_URL:-}" ]; then
+            echo "::error::BACKEND_HEALTH_URL secret is not configured"
+            exit 1
+          fi
+
+          HEALTH_URL="${BACKEND_HEALTH_URL%/}/health"
+
+          echo "Fetching ${HEALTH_URL}"
+          HEALTH_JSON="$(curl -sf "${HEALTH_URL}")" || {
+            echo "::error::Failed to fetch ${HEALTH_URL}"
+            exit 1
+          }
+
+          echo "Health response:"
+          echo "${HEALTH_JSON}"
+          echo
+
+          DEPLOYED_COMMIT="$(echo "${HEALTH_JSON}" | grep -oE '"commit"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed -E 's/.*"commit"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+
+          if [ -z "${DEPLOYED_COMMIT}" ]; then
+            echo "::error::No 'commit' field found in /health response"
+            exit 1
+          fi
+
+          echo "Deployed commit: ${DEPLOYED_COMMIT}"
+
+          LATEST_MAIN_COMMIT="$(git rev-parse origin/main)"
+          echo "Latest main commit: ${LATEST_MAIN_COMMIT}"
+
+          if [ "${DEPLOYED_COMMIT}" != "${LATEST_MAIN_COMMIT}" ]; then
+            echo "::error::Deployment is stale: running ${DEPLOYED_COMMIT} but main is at ${LATEST_MAIN_COMMIT}"
+            exit 1
+          fi
+
+          echo "Deployment is fresh and matches latest main."

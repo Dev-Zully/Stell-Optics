@@ -4,8 +4,43 @@ jest.mock("../lib/hasura", () => ({
 
 import { hasuraClient } from "../lib/hasura";
 import { HasuraService } from "./hasura.service";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const hasuraRequest = hasuraClient.request as jest.Mock;
+
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+describe("migration 006_normalize_events_primary_key", () => {
+  const migrationPath = join(
+    __dirname,
+    "../../migrations/006_normalize_events_primary_key.sql"
+  );
+
+  (TEST_DATABASE_URL ? it : it.skip)(
+    "is idempotent: running it twice does not error and leaves events_pkey in place",
+    async () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { Client } = require("pg");
+      const migrationSql = readFileSync(migrationPath, "utf8");
+
+      const client = new Client({ connectionString: TEST_DATABASE_URL });
+      await client.connect();
+      try {
+        await client.query(migrationSql);
+        await expect(client.query(migrationSql)).resolves.toBeDefined();
+
+        const { rows } = await client.query(
+          `SELECT conname FROM pg_constraint
+           WHERE conrelid = 'events'::regclass AND contype = 'p'`
+        );
+        expect(rows.map((row: { conname: string }) => row.conname)).toEqual(["events_pkey"]);
+      } finally {
+        await client.end();
+      }
+    }
+  );
+});
 
 describe("HasuraService.updateEscrowStatus", () => {
   it("updates escrow_transactions by contract_id and returns affected rows", async () => {

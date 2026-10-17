@@ -21,7 +21,15 @@ jest.mock('../services/dispute.service', () => ({
 import * as disputeService from '../services/dispute.service';
 import disputesRouter from './disputes';
 
+jest.mock('../services/review.service', () => ({
+  createReview: jest.fn(),
+}));
+
+import * as reviewService from '../services/review.service';
+import reviewsRouter from './reviews';
+
 const mockedService = disputeService as jest.Mocked<typeof disputeService>;
+const mockedReviewService = reviewService as jest.Mocked<typeof reviewService>;
 
 function buildApp() {
   const app = express();
@@ -183,6 +191,32 @@ describe('disputes route (HTTP layer)', () => {
       mockedService.withdrawDispute.mockRejectedValue(Object.assign(new Error('conflict'), { status: 409 }));
       const res = await request(app).post('/api/disputes/d1/withdraw').set(auth).send({});
       expect(res.status).toBe(409);
+    });
+  });
+});
+
+describe('reviews route (HTTP layer)', () => {
+  let app: express.Express;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    app.use('/api/reviews', reviewsRouter);
+  });
+
+  describe('POST /api/reviews', () => {
+    it('rejects a self-review where reviewer and reviewee are the same user', async () => {
+      // The authenticated user is 'user-1' (see auth mock above); attempting to
+      // review that same user must be rejected before any row is written.
+      const res = await request(app)
+        .post('/api/reviews')
+        .set(auth)
+        .send({ reviewerId: 'user-1', revieweeId: 'user-1', orderId: 'o1', rating: 5 });
+
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.status).toBeLessThan(500);
+      expect(mockedReviewService.createReview).not.toHaveBeenCalled();
     });
   });
 });

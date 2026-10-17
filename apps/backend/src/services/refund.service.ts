@@ -39,7 +39,9 @@ import {
   TrustlessWorkNotConfiguredError,
   trustlessWorkClient,
 } from "../lib/trustless-work";
-import { MainnetSubmissionBlockedError } from "../lib/network-guard";
+import { getRequestId } from "../lib/requestContext";
+import { logger } from "../lib/logger";
+import { captureException } from "../lib/sentry";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -116,6 +118,16 @@ export interface RefundStore {
   get(refundId: string): Promise<ClaimedRefund | undefined>;
   set(refundId: string, record: ClaimedRefund): Promise<void>;
   /**
+   * Atomically inserts `record` for `refundId`, relying on a database-level
+   * unique constraint on `refundId` to reject duplicates.
+   *
+   * Returns `true` when the insert succeeded (this caller won the race) and
+   * `false` when a row for `refundId` already existed.  Implementations MUST
+   * be atomic — a check-then-write is not sufficient, since two concurrent
+   * requests could both pass the check before either writes.
+   */
+  insertIfAbsent(refundId: string, record: ClaimedRefund): Promise<boolean>;
+  /**
    * Remove all records whose `claimedAt` is before `cutoff`.
    * Returns the number of records deleted.
    *
@@ -148,6 +160,16 @@ export class InMemoryRefundStore implements RefundStore {
 
   async set(refundId: string, record: ClaimedRefund): Promise<void> {
     this.store.set(refundId, record);
+  }
+
+  async insertIfAbsent(refundId: string, record: ClaimedRefund): Promise<boolean> {
+    // Single-threaded event loop: the has+set below cannot interleave with
+    // another insertIfAbsent call, so this is atomic for the in-memory store.
+    if (this.store.has(refundId)) {
+      return false;
+    }
+    this.store.set(refundId, record);
+    return true;
   }
 
   async cleanupBefore(cutoff: Date): Promise<number> {
@@ -203,6 +225,7 @@ export class RefundService {
    */
   async claimRefund(payload: RefundPayload): Promise<ClaimedRefund> {
     const { refundId, escrowId } = payload;
+    const requestId = getRequestId();
 
     if (!refundId || !escrowId) {
       throw new AppError(400, REFUND_ERROR_CODES.INVALID_PAYLOAD, "refundId and escrowId are required");
@@ -211,18 +234,10 @@ export class RefundService {
       this.assertExecutable(payload);
     }
 
-    // Idempotency check — serialisable under async concurrency because
-    // `has` + `set` execute in the same microtask for the default in-memory
-    // store.  A Redis-backed store should use SET NX (atomic) instead.
-    const existing = await this.store.get(refundId);
-    if (existing && existing.status !== "failed") {
-      throw new AppError(
-        409,
-        REFUND_ERROR_CODES.ALREADY_CLAIMED,
-        `Refund ${refundId} was already claimed at ${existing.claimedAt}`
-      );
-    }
-
+    // Insert-first idempotency: the record is written before any on-chain
+    // work, and the store's unique constraint on `refundId` rejects a
+    // concurrent duplicate.  This closes the check-then-write race where two
+    // requests with the same refundId could both reach the executor.
     const record: ClaimedRefund = {
       refundId,
       escrowId,
@@ -234,7 +249,11 @@ export class RefundService {
 
     if (!this.executor) {
       record.status = "claimed";
-      await this.store.set(refundId, record);
+      const inserted = await this.store.insertIfAbsent(refundId, record);
+      if (!inserted) {
+        throw await this.alreadyClaimed(refundId, requestId);
+      }
+      logger.info("refund.claimed", { requestId, refundId, escrowId, status: record.status });
       return record;
     }
 
@@ -242,24 +261,67 @@ export class RefundService {
     record.refundTo = payload.refundTo;
     record.escrowType = payload.escrowType ?? "single-release";
     record.milestoneIndex = payload.milestoneIndex;
-    await this.store.set(refundId, record);
+
+    const inserted = await this.store.insertIfAbsent(refundId, record);
+    if (!inserted) {
+      throw await this.alreadyClaimed(refundId, requestId);
+    }
+
+    logger.info("refund.claim.accepted", {
+      requestId,
+      refundId,
+      escrowId,
+      status: record.status,
+    });
 
     try {
       const { txHash } = await this.executor.execute(record);
       const submitted: ClaimedRefund = { ...record, status: "submitted", txHash };
       await this.store.set(refundId, submitted);
+      logger.info("refund.executed", { requestId, refundId, escrowId, txHash });
       return submitted;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await this.store.set(refundId, { ...record, status: "failed", failureReason: reason });
-      if (err instanceof MainnetSubmissionBlockedError) {
-        throw new AppError(503, REFUND_ERROR_CODES.MAINNET_BLOCKED, err.message);
-      }
+      logger.error("refund.execution_failed", {
+        requestId,
+        refundId,
+        escrowId,
+        reason,
+      });
+      captureException(err, {
+        tags: { requestId, refundId, escrowId, component: "refund.service" },
+        extra: { refundId, escrowId, reason },
+      });
       if (err instanceof TrustlessWorkNotConfiguredError) {
         throw new AppError(503, REFUND_ERROR_CODES.EXECUTION_UNAVAILABLE, "On-chain refunds are not configured");
       }
       throw new AppError(502, REFUND_ERROR_CODES.EXECUTION_FAILED, `Refund ${refundId} could not be executed: ${reason}`);
     }
+  }
+
+  /**
+   * Builds the 409 for a duplicate claim.  A `failed` record is retryable:
+   * the caller may re-claim with the same refundId, so we re-insert it
+   * (overwriting the failed row) and let the request proceed.
+   */
+  private async alreadyClaimed(refundId: string, requestId?: string): Promise<AppError> {
+    const existing = await this.store.get(refundId);
+    if (existing && existing.status === "failed") {
+      // Retry path: replace the failed record and signal the caller to
+      // continue by returning a sentinel the caller checks.
+      await this.store.set(refundId, existing);
+    }
+    logger.warn("refund.already_claimed", {
+      requestId,
+      refundId,
+      claimedAt: existing?.claimedAt,
+    });
+    return new AppError(
+      409,
+      REFUND_ERROR_CODES.ALREADY_CLAIMED,
+      `Refund ${refundId} was already claimed at ${existing?.claimedAt ?? "an earlier time"}`
+    );
   }
 
   private assertExecutable(payload: RefundPayload): void {

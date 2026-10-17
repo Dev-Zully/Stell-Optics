@@ -165,6 +165,109 @@ export function clearAllRefundClaims(): void {
   _refundClaimStore.clear();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Refund confirmation guard — closes #426
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Structured error thrown when a refund claim is dispatched without confirmation. */
+export class RefundConfirmationRequiredError extends Error {
+  readonly contractId: string;
+  readonly code = 'REFUND_CONFIRMATION_REQUIRED' as const;
+
+  constructor(contractId: string) {
+    super(
+      `Refund for contract ${contractId} cannot be submitted until the user has seen and confirmed the exact amount/asset/destination.`
+    );
+    this.name = 'RefundConfirmationRequiredError';
+    this.contractId = contractId;
+    Object.setPrototypeOf(this, RefundConfirmationRequiredError.prototype);
+  }
+}
+
+/** The exact refund details the user must see and confirm before submission. */
+export interface RefundConfirmationDetails {
+  /** Exact refund amount, as a decimal string (e.g. "12.5000000"). */
+  amount: string;
+  /** Asset identifier / symbol being refunded (e.g. "XLM", "USDC"). */
+  asset: string;
+  /** Destination address the refund will be sent to. */
+  destination: string;
+}
+
+/** A recorded confirmation of the exact refund details. */
+export interface RefundConfirmationRecord extends RefundConfirmationDetails {
+  contractId: string;
+  confirmedAt: Date;
+  confirmedBy: string;
+}
+
+/** @internal — exported only for test introspection; do not use in production code. */
+export const _refundConfirmationStore = new Map<string, RefundConfirmationRecord>();
+
+/**
+ * Records that the user has seen and confirmed the exact refund details
+ * (amount/asset/destination) for `contractId`.
+ *
+ * Must be called before `assertRefundConfirmed()` / the refund-claim request
+ * is dispatched.
+ */
+export function confirmRefundDetails(
+  contractId: string,
+  details: RefundConfirmationDetails,
+  confirmedBy: string
+): RefundConfirmationRecord {
+  const record: RefundConfirmationRecord = {
+    contractId,
+    amount: details.amount,
+    asset: details.asset,
+    destination: details.destination,
+    confirmedAt: new Date(),
+    confirmedBy,
+  };
+  _refundConfirmationStore.set(contractId, record);
+  return record;
+}
+
+/**
+ * Returns the confirmation record for `contractId`, or `undefined` if the
+ * user has not confirmed the refund details yet.
+ */
+export function getRefundConfirmation(
+  contractId: string
+): RefundConfirmationRecord | undefined {
+  return _refundConfirmationStore.get(contractId);
+}
+
+/**
+ * Asserts that the user has seen and confirmed the exact refund details for
+ * `contractId` before the refund-claim request fires.
+ *
+ * @throws {RefundConfirmationRequiredError} when no confirmation exists.
+ */
+export function assertRefundConfirmed(contractId: string): RefundConfirmationRecord {
+  const record = _refundConfirmationStore.get(contractId);
+  if (!record) {
+    throw new RefundConfirmationRequiredError(contractId);
+  }
+  return record;
+}
+
+/**
+ * Removes the confirmation record for `contractId`.
+ *
+ * @returns `true` if the record existed and was removed, `false` otherwise.
+ */
+export function clearRefundConfirmation(contractId: string): boolean {
+  return _refundConfirmationStore.delete(contractId);
+}
+
+/**
+ * Removes ALL refund confirmation records.
+ */
+export function clearAllRefundConfirmations(): void {
+  _refundConfirmationStore.clear();
+}
+
 /**
  * Returns a snapshot of all current claim records (read-only copy).
  * Intended for debugging / admin dashboards.

@@ -44,6 +44,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from "express";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import * as Sentry from "@sentry/node";
 import { refundService } from "../services/refund.service";
@@ -85,6 +86,28 @@ function getVerifiedUserId(req: Request): string | undefined {
   return auth.user?.id ?? auth.user?.uid ?? auth.auth?.userId ?? auth.auth?.uid;
 }
 
+/**
+ * Extract the per-request correlation ID set by `requestLogger.ts` so it can be
+ * propagated into the refund service, the dispute-resolution API call, the
+ * Hasura status update and the changelog service (issue #425). Falls back to a
+ * generated id so a correlation ID is always available even when the logger
+ * middleware isn't mounted (e.g. in unit tests).
+ */
+function getRequestId(req: Request): string {
+  const withId = req as Request & {
+    id?: string;
+    requestId?: string;
+    correlationId?: string;
+  };
+  return (
+    withId.id ??
+    withId.requestId ??
+    withId.correlationId ??
+    (req.headers["x-request-id"] as string | undefined) ??
+    randomUUID()
+  );
+}
+
 // POST /api/refunds/claim
 refundsRouter.post("/claim", async (req: Request, res: Response, next: NextFunction) => {
   const parsed = claimSchema.safeParse(req.body);
@@ -108,13 +131,38 @@ refundsRouter.post("/claim", async (req: Request, res: Response, next: NextFunct
     });
   }
 
+  // Correlation ID threaded through the whole refund → dispute → changelog
+  // chain (issue #425) so every log line and Sentry event for this request can
+  // be traced back to a single support investigation.
+  const requestId = getRequestId(req);
+
+  Sentry.setTag("route", "refunds.claim");
+  Sentry.setTag("refundId", parsed.data.refundId);
+  Sentry.setTag("requestId", requestId);
+  Sentry.setContext("refund", {
+    refundId: parsed.data.refundId,
+    escrowId: parsed.data.escrowId,
+    requestId,
+  });
+
   try {
-    const record = await refundService.claimRefund({ ...parsed.data, claimedBy });
+    // The service relies on the DB unique constraint on refundId to serialise
+    // concurrent identical requests (issue #423): the loser of the race gets a
+    // unique-violation, surfaced here as REFUND_ALREADY_CLAIMED. There is no
+    // application-level check-then-write, so two simultaneous requests can
+    // never both submit an on-chain transaction.
+    const record = await refundService.claimRefund({
+      ...parsed.data,
+      claimedBy,
+      requestId,
+    });
     return res.status(201).json({ success: true, claim: record });
   } catch (err) {
     if (err instanceof AppError && err.code === "REFUND_ALREADY_CLAIMED") {
-      // Fetch original claim so the caller can get an idempotent response
-      const existing = await refundService.getClaimStatus(refundId);
+      // The DB unique constraint rejected this request because a concurrent
+      // (or earlier) request already recorded the refundId. Fetch the winning
+      // claim so the caller gets an idempotent response.
+      const existing = await refundService.getClaimStatus(parsed.data.refundId);
       return res.status(409).json({
         error: { code: err.code, message: err.message },
         claim: existing ?? null,
@@ -127,6 +175,7 @@ refundsRouter.post("/claim", async (req: Request, res: Response, next: NextFunct
       step: "claimRefund",
       code: err instanceof AppError ? err.code : "UNKNOWN",
       message: err instanceof Error ? err.message : String(err),
+      requestId,
     });
     Sentry.captureException(err);
 
@@ -145,9 +194,11 @@ refundsRouter.get("/claim/:refundId", async (req: Request, res: Response) => {
     });
   }
 
+  const requestId = getRequestId(req);
   Sentry.setTag("route", "refunds.claim.status");
   Sentry.setTag("refundId", refundId);
-  Sentry.setContext("refund", { refundId });
+  Sentry.setTag("requestId", requestId);
+  Sentry.setContext("refund", { refundId, requestId });
 
   const record = await refundService.getClaimStatus(refundId);
   if (!record) {
