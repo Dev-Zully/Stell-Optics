@@ -65,6 +65,44 @@ Check the [open issues](https://github.com/frienzy514-png/stellar-TrueStub/issue
 issues labeled [`good first issue`](https://github.com/frienzy514-png/stellar-TrueStub/labels/good%20first%20issue)
 are a good place to start.
 
+### `good first issue` label guidelines
+
+The `good first issue` label signals that an issue is genuinely approachable
+for someone new to the codebase. To stay accurate, it is maintained according
+to these criteria:
+
+**Criteria for applying the label:**
+
+- The change is self-contained: it touches a small, well-bounded area of the
+  codebase and does not require understanding the full system.
+- It has no hard blockers — no unresolved dependencies on other open issues,
+  no pending architectural decisions, and no in-progress related refactors
+  that would conflict.
+- The expected solution and the definition of "done" are clear from the issue
+  description alone; a new contributor should not need to ask many clarifying
+  questions to get started.
+- No specialized domain knowledge is required (e.g., deep Soroban/blockchain
+  internals, complex SQL migration sequencing, or nuanced Firebase Auth flows).
+
+**When to remove or query the label:**
+
+An issue can become inaccurate over time even if it was correctly labeled at
+filing. Remove (or leave a comment questioning) the label when:
+
+- Comments reveal scope creep or hidden complexity that was not in the original
+  description.
+- Another issue was merged that changes the context and makes the fix less
+  obvious.
+- The issue has accumulated unresolved questions that a first-time contributor
+  would be unable to answer on their own.
+
+**Periodic audits:**
+
+Maintainers should periodically walk the open `good first issue` list and
+confirm each item still meets the criteria above. When an issue no longer
+qualifies, either relabel it (e.g., `help wanted`) or add a comment explaining
+the new complexity so contributors are not surprised.
+
 ## Workflow
 
 1. **Fork and branch** — see [`docs/GIT_GUIDELINE.md`](docs/GIT_GUIDELINE.md)
