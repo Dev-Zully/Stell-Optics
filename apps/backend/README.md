@@ -32,6 +32,46 @@ When a new required variable is added to `src/config/env.ts`, add it to the
 `backend` service in `docker-compose.yml`, the root `.env.example`, and this
 table.
 
+## Simulating webhook deliveries locally
+
+`scripts/simulate-webhook.ts` builds a correctly HMAC-SHA256-signed
+Trustless Work escrow-status payload and POSTs it to a running backend
+instance. It lets you exercise the full webhook path — signature
+verification, dedup, Hasura write, notifications — without waiting for a
+real Trustless Work testnet event.
+
+**Pre-requisites**: a backend instance running (e.g. `yarn dev`) with
+`TRUSTLESS_WORK_WEBHOOK_SECRET` set.
+
+```bash
+# Default run — fires one "completed" event to http://localhost:4000
+yarn simulate:webhook
+
+# Override status / contract ID
+yarn simulate:webhook --status funded --contractId CAABC123...
+
+# Exercise the duplicate-delivery dedup guard (sends the same payload twice)
+yarn simulate:webhook --status disputed --duplicate
+```
+
+Available flags (all optional):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--status` | `completed` | Escrow status (`funded`, `completed`, `released`, `disputed`, …) |
+| `--contractId` | random hex | Stellar contract / escrow ID |
+| `--engagementId` | _(empty)_ | Falls back to contractId in the handler |
+| `--amount` | `150.00` | Escrow amount string |
+| `--currency` | `USDC` | Asset currency code |
+| `--recipientEmail` | `buyer@example.com` | For the notification side-effect path |
+| `--recipientName` | `Alice Buyer` | Recipient display name |
+| `--role` | `buyer` | Notification perspective (`buyer` \| `seller`) |
+| `--url` | `http://localhost:{PORT}/webhooks/escrow-status` | Override the full endpoint URL |
+| `--secret` | `TRUSTLESS_WORK_WEBHOOK_SECRET` / `dev-secret` | HMAC signing key |
+| `--duplicate` | false | Send the same payload twice to test the dedup guard |
+
+Exit `0` on HTTP 200, `1` on any other response or network error.
+
 ## Database migrations
 
 Migrations live in `src/db/migrations/` and are applied in filename order.
