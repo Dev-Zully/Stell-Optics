@@ -1,5 +1,6 @@
 import { hasuraClient } from "../lib/hasura";
 import { AppError } from "../middleware/errorHandler";
+import { getRequestId } from "../lib/requestLogger";
 
 interface EscrowMutationData {
   update_escrow_transactions?: { affected_rows?: number };
@@ -44,6 +45,7 @@ export class HasuraService {
     contractId: string,
     status: string
   ): Promise<{ affected_rows: number }> {
+    const requestId = getRequestId();
     const query = `
       mutation UpdateEscrowStatus($contractId: String!, $status: String!) {
         update_escrow_transactions(
@@ -57,12 +59,18 @@ export class HasuraService {
 
     let data: EscrowMutationData;
     try {
-      data = await hasuraClient.request<EscrowMutationData>(query, {
-        contractId,
-        status,
-      });
+      data = await hasuraClient.request<EscrowMutationData>(
+        query,
+        {
+          contractId,
+          status,
+        },
+        { requestId }
+      );
     } catch {
-      throw new Error("Failed to update escrow status in Hasura");
+      throw new Error(
+        `Failed to update escrow status in Hasura (requestId=${requestId ?? "unknown"})`
+      );
     }
     return { affected_rows: data.update_escrow_transactions?.affected_rows ?? 0 };
   }
@@ -90,11 +98,12 @@ export class HasuraService {
       }
     `;
 
+    const requestId = getRequestId();
     let data: EscrowByIdData;
     try {
-      data = await hasuraClient.request<EscrowByIdData>(query, { id });
+      data = await hasuraClient.request<EscrowByIdData>(query, { id }, { requestId });
     } catch {
-      throw new Error("Failed to fetch escrow from Hasura");
+      throw new Error(`Failed to fetch escrow from Hasura (requestId=${requestId ?? "unknown"})`);
     }
 
     const escrow = data.escrow_transactions_by_pk ?? null;
@@ -139,8 +148,13 @@ export class HasuraService {
       }
     `;
 
+    const requestId = getRequestId();
     try {
-      const data = await hasuraClient.request<NotificationMutationData>(mutation, notification);
+      const data = await hasuraClient.request<NotificationMutationData>(
+        mutation,
+        notification,
+        { requestId }
+      );
       return Boolean(data.insert_notifications_one?.id);
     } catch {
       return false;
@@ -162,11 +176,14 @@ export class HasuraService {
       }
     `;
 
+    const requestId = getRequestId();
     let data: RefundRetryData;
     try {
-      data = await hasuraClient.request<RefundRetryData>(query, { refundId });
+      data = await hasuraClient.request<RefundRetryData>(query, { refundId }, { requestId });
     } catch {
-      throw new Error("Failed to read refund retry count from Hasura");
+      throw new Error(
+        `Failed to read refund retry count from Hasura (requestId=${requestId ?? "unknown"})`
+      );
     }
 
     const refund = data.refunds?.[0];
@@ -197,14 +214,21 @@ export class HasuraService {
       }
     `;
 
+    const requestId = getRequestId();
     let data: RefundRetryMutationData;
     try {
-      data = await hasuraClient.request<RefundRetryMutationData>(mutation, {
-        refundId,
-        maxRetries,
-      });
+      data = await hasuraClient.request<RefundRetryMutationData>(
+        mutation,
+        {
+          refundId,
+          maxRetries,
+        },
+        { requestId }
+      );
     } catch {
-      throw new Error("Failed to increment refund retry count in Hasura");
+      throw new Error(
+        `Failed to increment refund retry count in Hasura (requestId=${requestId ?? "unknown"})`
+      );
     }
     return { affected_rows: data.update_refunds?.affected_rows ?? 0 };
   }

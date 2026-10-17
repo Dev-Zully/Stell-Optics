@@ -20,8 +20,23 @@ import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { changelogService } from "../services/changelog.service";
 import { AppError } from "../middleware/errorHandler";
+import { getRequestId } from "../middleware/requestLogger";
+import { setSentryRequestContext } from "../lib/sentry";
 
 export const changelogRouter = Router();
+
+/**
+ * Attach the inbound correlation ID to the Sentry scope so every event
+ * emitted while handling this changelog request (including those triggered
+ * by a refund → dispute → changelog chain) shares the refund's request ID.
+ */
+function tagRequest(req: Request): string | undefined {
+  const requestId = getRequestId(req);
+  if (requestId) {
+    setSentryRequestContext(requestId, { route: "changelog" });
+  }
+  return requestId;
+}
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
@@ -41,6 +56,7 @@ const paginationSchema = z.object({
 
 // POST /api/changelog — append a new immutable entry
 changelogRouter.post("/", async (req: Request, res: Response) => {
+  const requestId = tagRequest(req);
   const parsed = appendSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({
@@ -53,7 +69,7 @@ changelogRouter.post("/", async (req: Request, res: Response) => {
   }
 
   try {
-    const entry = await changelogService.appendEntry(parsed.data);
+    const entry = await changelogService.appendEntry(parsed.data, { requestId });
     return res.status(201).json({ entry });
   } catch (err) {
     if (err instanceof AppError) {
@@ -66,6 +82,7 @@ changelogRouter.post("/", async (req: Request, res: Response) => {
 // GET /api/changelog/resource/:resourceId — list entries for a resource
 // NOTE: This route must be declared BEFORE /:entryId to avoid route shadowing
 changelogRouter.get("/resource/:resourceId", async (req: Request, res: Response) => {
+  tagRequest(req);
   const parsed = paginationSchema.safeParse(req.query);
   if (!parsed.success) {
     return res.status(400).json({
@@ -99,6 +116,7 @@ changelogRouter.get("/resource/:resourceId", async (req: Request, res: Response)
 
 // GET /api/changelog/:entryId
 changelogRouter.get("/:entryId", async (req: Request, res: Response) => {
+  tagRequest(req);
   const entry = await changelogService.getEntry(req.params.entryId);
   if (!entry) {
     return res.status(404).json({
@@ -110,8 +128,9 @@ changelogRouter.get("/:entryId", async (req: Request, res: Response) => {
 
 // DELETE /api/changelog/:entryId — remove (with audit event)
 changelogRouter.delete("/:entryId", async (req: Request, res: Response) => {
+  const requestId = tagRequest(req);
   try {
-    const entry = await changelogService.removeEntry(req.params.entryId);
+    const entry = await changelogService.removeEntry(req.params.entryId, { requestId });
     return res.json({ removed: true, entry });
   } catch (err) {
     if (err instanceof AppError) {
@@ -122,7 +141,8 @@ changelogRouter.delete("/:entryId", async (req: Request, res: Response) => {
 });
 
 // PUT /api/changelog/:entryId — FORBIDDEN (write-once)
-changelogRouter.put("/:entryId", async (_req: Request, res: Response) => {
+changelogRouter.put("/:entryId", async (req: Request, res: Response) => {
+  tagRequest(req);
   return res.status(409).json({
     error: {
       code: "CHANGELOG_UPDATE_FORBIDDEN",
@@ -133,7 +153,8 @@ changelogRouter.put("/:entryId", async (_req: Request, res: Response) => {
 });
 
 // PATCH /api/changelog/:entryId — FORBIDDEN (write-once)
-changelogRouter.patch("/:entryId", async (_req: Request, res: Response) => {
+changelogRouter.patch("/:entryId", async (req: Request, res: Response) => {
+  tagRequest(req);
   return res.status(409).json({
     error: {
       code: "CHANGELOG_UPDATE_FORBIDDEN",

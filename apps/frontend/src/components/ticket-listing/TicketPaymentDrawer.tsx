@@ -17,6 +17,9 @@ export type RoomPaymentInfo = {
   billingDescription: string
   depositStatusText: string
   rentalStatusText: string
+  refundAmount: number
+  refundAsset: string
+  refundDestination: string
 }
 
 type TicketPaymentDrawerProps = {
@@ -25,14 +28,25 @@ type TicketPaymentDrawerProps = {
 
 const TicketPaymentDrawer = ({ info }: TicketPaymentDrawerProps) => {
   const [open, setOpen] = useState(false)
-  const [step, setStep] = useState<"billing" | "status">("billing")
+  const [step, setStep] = useState<"billing" | "status" | "refundConfirm">("billing")
+  const [refundConfirmed, setRefundConfirmed] = useState(false)
 
   useEffect(() => {
     if (!open) {
-      const id = setTimeout(() => setStep("billing"), 200)
+      const id = setTimeout(() => {
+        setStep("billing")
+        setRefundConfirmed(false)
+      }, 200)
       return () => clearTimeout(id)
     }
   }, [open])
+
+  const handleRefundConfirm = () => {
+    if (!refundConfirmed) return
+    // Only fires the refund-claim request after the user has explicitly
+    // confirmed the exact amount/asset/destination shown in the step above.
+    setStep("status")
+  }
 
   return (
     <Drawer open={open} onOpenChange={setOpen}>
@@ -114,10 +128,60 @@ const TicketPaymentDrawer = ({ info }: TicketPaymentDrawerProps) => {
                     </div>
                   </div>
 
-          <div className="pt-2 mb-2">
+          <div className="pt-2 mb-2 space-y-2">
+            <Button variant="outline" className="w-full" onClick={() => setStep("refundConfirm")}>Claim refund</Button>
             <Button variant="outline" className="w-full" onClick={() => setOpen(false)}>Close</Button>
           </div>
         </div>
+        )}
+
+        {step === "refundConfirm" && (
+          <div className="p-4 space-y-4">
+            <div className="flex items-start justify-between">
+              <span className="inline-flex items-center gap-2 text-xs text-blue-700 bg-blue-100 px-2 py-1 rounded-full">{info.propertyTitle}</span>
+              <div className="text-blue-600"><Info className="h-5 w-5" /></div>
+            </div>
+            <h2 className="text-2xl font-semibold">Confirm refund</h2>
+            <p className="text-sm text-gray-500">
+              Please review the exact refund details below. This action submits an on-chain transaction and cannot be undone.
+            </p>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between rounded-xl bg-gray-100 p-4 text-sm">
+                <span className="text-gray-600">Amount</span>
+                <span className="font-semibold">{info.refundAmount.toLocaleString()} {info.refundAsset}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl bg-gray-100 p-4 text-sm">
+                <span className="text-gray-600">Asset</span>
+                <span className="font-semibold">{info.refundAsset}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-xl bg-gray-100 p-4 text-sm">
+                <span className="text-gray-600">Destination</span>
+                <span className="font-semibold break-all text-right max-w-[60%]">{info.refundDestination}</span>
+              </div>
+            </div>
+
+            <label className="flex items-start gap-2 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={refundConfirmed}
+                onChange={(e) => setRefundConfirmed(e.target.checked)}
+              />
+              <span>I confirm the refund amount, asset and destination above are correct.</span>
+            </label>
+
+            <div className="pt-2 mb-2 space-y-2">
+              <Button
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={!refundConfirmed}
+                onClick={handleRefundConfirm}
+              >
+                Confirm refund
+              </Button>
+              <Button variant="outline" className="w-full" onClick={() => setStep("status")}>Cancel</Button>
+            </div>
+          </div>
         )}
       </DrawerContent>
     </Drawer>

@@ -1,0 +1,115 @@
+name: TODO/FIXME Summary
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  todo-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Grep for TODO/FIXME markers
+        id: scan
+        run: |
+          set -euo pipefail
+
+          # Collect tracked files (exclude .git and binary-ish paths)
+          files=$(git ls-files)
+
+          todo_count=0
+          fixme_count=0
+          total_count=0
+
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            todo_count=$(grep -I -E -o '\bTODO\b' $files 2>/dev/null | wc -l | tr -d ' ')
+            # shellcheck disable=SC2086
+            fixme_count=$(grep -I -E -o '\bFIXME\b' $files 2>/dev/null | wc -l | tr -d ' ')
+          fi
+
+          total_count=$((todo_count + fixme_count))
+
+          echo "todo_count=$todo_count" >> "$GITHUB_OUTPUT"
+          echo "fixme_count=$fixme_count" >> "$GITHUB_OUTPUT"
+          echo "total_count=$total_count" >> "$GITHUB_OUTPUT"
+
+          echo "TODO: $todo_count"
+          echo "FIXME: $fixme_count"
+          echo "Total: $total_count"
+
+      - name: Find previous summary comment
+        id: previous
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ vars.TODO_TRACKING_ISSUE }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ISSUE_NUMBER:-}" ]; then
+            echo "No TODO_TRACKING_ISSUE variable set; skipping previous-comment lookup."
+            echo "previous_total=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          prev_total=$(gh issue view "$ISSUE_NUMBER" --json comments \
+            --jq '[.comments[] | select(.body | test("<!-- todo-summary -->"))] | last | .body' \
+            | grep -oE 'Total: [0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
+
+          echo "previous_total=${prev_total}" >> "$GITHUB_OUTPUT"
+          echo "Previous total: ${prev_total:-none}"
+
+      - name: Post or update summary comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ vars.TODO_TRACKING_ISSUE }}
+          TODO_COUNT: ${{ steps.scan.outputs.todo_count }}
+          FIXME_COUNT: ${{ steps.scan.outputs.fixme_count }}
+          TOTAL_COUNT: ${{ steps.scan.outputs.total_count }}
+          PREVIOUS_TOTAL: ${{ steps.previous.outputs.previous_total }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ISSUE_NUMBER:-}" ]; then
+            echo "No TODO_TRACKING_ISSUE variable set; nothing to post."
+            exit 0
+          fi
+
+          if [ -n "${PREVIOUS_TOTAL:-}" ]; then
+            diff=$((TOTAL_COUNT - PREVIOUS_TOTAL))
+            if [ "$diff" -gt 0 ]; then
+              diff_text="+${diff} since last run"
+            elif [ "$diff" -lt 0 ]; then
+              diff_text="${diff} since last run"
+            else
+              diff_text="no change since last run"
+            fi
+          else
+            diff_text="no previous data"
+          fi
+
+          body=$(cat <<EOF
+          <!-- todo-summary -->
+          ## TODO/FIXME Summary
+
+          **Total:** ${TOTAL_COUNT} (${diff_text})
+
+          | Marker | Count |
+          | ------ | ----- |
+          | TODO   | ${TODO_COUNT} |
+          | FIXME  | ${FIXME_COUNT} |
+
+          _Updated: $(date -u '+%Y-%m-%d %H:%M UTC')_
+          EOF
+          )
+
+          gh issue comment "$ISSUE_NUMBER" --body "$body"
+          echo "Posted summary comment to issue #${ISSUE_NUMBER}."

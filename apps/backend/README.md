@@ -32,6 +32,46 @@ When a new required variable is added to `src/config/env.ts`, add it to the
 `backend` service in `docker-compose.yml`, the root `.env.example`, and this
 table.
 
+## Simulating webhook deliveries locally
+
+`scripts/simulate-webhook.ts` builds a correctly HMAC-SHA256-signed
+Trustless Work escrow-status payload and POSTs it to a running backend
+instance. It lets you exercise the full webhook path — signature
+verification, dedup, Hasura write, notifications — without waiting for a
+real Trustless Work testnet event.
+
+**Pre-requisites**: a backend instance running (e.g. `yarn dev`) with
+`TRUSTLESS_WORK_WEBHOOK_SECRET` set.
+
+```bash
+# Default run — fires one "completed" event to http://localhost:4000
+yarn simulate:webhook
+
+# Override status / contract ID
+yarn simulate:webhook --status funded --contractId CAABC123...
+
+# Exercise the duplicate-delivery dedup guard (sends the same payload twice)
+yarn simulate:webhook --status disputed --duplicate
+```
+
+Available flags (all optional):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--status` | `completed` | Escrow status (`funded`, `completed`, `released`, `disputed`, …) |
+| `--contractId` | random hex | Stellar contract / escrow ID |
+| `--engagementId` | _(empty)_ | Falls back to contractId in the handler |
+| `--amount` | `150.00` | Escrow amount string |
+| `--currency` | `USDC` | Asset currency code |
+| `--recipientEmail` | `buyer@example.com` | For the notification side-effect path |
+| `--recipientName` | `Alice Buyer` | Recipient display name |
+| `--role` | `buyer` | Notification perspective (`buyer` \| `seller`) |
+| `--url` | `http://localhost:{PORT}/webhooks/escrow-status` | Override the full endpoint URL |
+| `--secret` | `TRUSTLESS_WORK_WEBHOOK_SECRET` / `dev-secret` | HMAC signing key |
+| `--duplicate` | false | Send the same payload twice to test the dedup guard |
+
+Exit `0` on HTTP 200, `1` on any other response or network error.
+
 ## Database migrations
 
 Migrations live in `src/db/migrations/` and are applied in filename order.
@@ -107,3 +147,42 @@ WHERE price IS NULL
 
 If no environment reports legacy rows, document that finding here and no
 backfill is required.
+
+## Trustless Work escrow statuses
+
+`POST /webhooks/escrow-status` receives escrow status updates from Trustless
+Work. The handler in `src/routes/webhooks.ts` maps each incoming status through
+`STATUS_MAP` to the internal status used by this backend.
+
+### Canonical status list
+
+The keys of `STATUS_MAP` must cover **every** status value Trustless Work can
+send, as documented in Trustless Work's API reference. The canonical list is:
+
+| Trustless Work status | Mapped internal status |
+| --- | --- |
+| `created` | `pending` |
+| `funded` | `funded` |
+| `in_progress` | `in_progress` |
+| `completed` | `completed` |
+| `released` | `released` |
+| `disputed` | `disputed` |
+| `resolved` | `resolved` |
+| `cancelled` | `cancelled` |
+| `refunded` | `refunded` |
+
+### Completeness contract
+
+- Every documented Trustless Work status **must** have an entry in
+  `STATUS_MAP`. A status that is documented but missing from the map is a bug:
+  a legitimate webhook delivery for that status would be rejected.
+- A status that is **not** in `STATUS_MAP` is treated as unknown and the
+  request is rejected with a `400` response. This is intentional — the backend
+  refuses to guess an internal status for a value it does not recognise.
+- Because a `400` here almost always means the map is out of date rather than
+  the caller sending a malformed request, a dedicated alert fires for `400`
+  responses on this route (separate from generic error monitoring). If that
+  alert triggers, the fix is to add the new status to `STATUS_MAP` and to the
+  table above.
+- When Trustless Work introduces a new status, update `STATUS_MAP`, the table
+  above, and the test that asserts the map covers the documented statuses.
