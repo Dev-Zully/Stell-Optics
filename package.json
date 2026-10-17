@@ -28,6 +28,8 @@
     "typecheck": "yarn workspace @truestub/frontend typecheck && yarn workspace @truestub/backend typecheck",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
+    "migrate:up": "yarn workspace @truestub/backend migrate:up",
+    "migrate:up:audited": "yarn workspace @truestub/backend migrate:up:audited",
     "release": "semantic-release",
     "prepare": "husky"
   },
