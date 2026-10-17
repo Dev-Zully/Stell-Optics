@@ -11,11 +11,13 @@ import {
   handleError,
 } from "@/components/tw-blocks/handle-errors/handle";
 import { useWalletContext } from "@/components/tw-blocks/wallet-kit/WalletProvider";
+import { useFundingTrustline } from "../shared/useFundingTrustline";
 
 export function useFundEscrow() {
   const { fundEscrow } = useEscrowsMutations();
   const { selectedEscrow, updateEscrow } = useEscrowContext();
   const { walletAddress } = useWalletContext();
+  const trustlineGuard = useFundingTrustline(walletAddress, selectedEscrow?.trustline);
 
   const form = useForm<FundEscrowValues>({
     resolver: zodResolver(fundEscrowSchema),
@@ -28,8 +30,16 @@ export function useFundEscrow() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   const handleSubmit = form.handleSubmit(async (payload) => {
+    let awaitingTrustline = false;
     try {
       setIsSubmitting(true);
+
+      // Confirm the wallet can hold the escrow's asset before funding (#418);
+      // otherwise prompt for the trustline instead of failing on-chain.
+      if (!(await trustlineGuard.ensureTrustline())) {
+        awaitingTrustline = true;
+        return;
+      }
 
       /**
        * Create the final payload for the fund escrow mutation
@@ -71,9 +81,10 @@ export function useFundEscrow() {
       toast.error(handleError(error as ErrorResponse).message);
     } finally {
       setIsSubmitting(false);
-      form.reset();
+      // Keep the entered amount while the trustline prompt is open.
+      if (!awaitingTrustline) form.reset();
     }
   });
 
-  return { form, handleSubmit, isSubmitting };
+  return { form, handleSubmit, isSubmitting, trustlineGuard };
 }

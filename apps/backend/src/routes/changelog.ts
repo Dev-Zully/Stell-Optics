@@ -14,11 +14,18 @@
  * with code CHANGELOG_UPDATE_FORBIDDEN.  To correct a wrong entry:
  *   1. DELETE /api/changelog/:entryId
  *   2. POST   /api/changelog  (with the corrected data)
+ *
+ * Entry types (issue #416)
+ * ------------------------
+ * `action` must be one of the entry types in services/changelog-taxonomy.ts
+ * (documented in docs/CHANGELOG_TAXONOMY.md). Unknown types are rejected with
+ * 400 CHANGELOG_UNKNOWN_ENTRY_TYPE.
  */
 
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { changelogService } from "../services/changelog.service";
+import { changelogService, CHANGELOG_ERROR_CODES } from "../services/changelog.service";
+import { CHANGELOG_ENTRY_TYPES, isChangelogEntryType } from "../services/changelog-taxonomy";
 import { AppError } from "../middleware/errorHandler";
 import { getRequestId } from "../middleware/requestLogger";
 import { setSentryRequestContext } from "../lib/sentry";
@@ -43,7 +50,12 @@ const MAX_PAGE_SIZE = 100;
 
 const appendSchema = z.object({
   entryId: z.string().min(1, "entryId is required"),
-  action: z.string().min(1, "action is required"),
+  action: z
+    .string()
+    .min(1, "action is required")
+    .refine(isChangelogEntryType, {
+      message: `action must be one of: ${Object.values(CHANGELOG_ENTRY_TYPES).join(", ")}`,
+    }),
   actorId: z.string().min(1, "actorId is required"),
   resourceId: z.string().min(1, "resourceId is required"),
   metadata: z.record(z.unknown()).optional(),
@@ -59,6 +71,17 @@ changelogRouter.post("/", async (req: Request, res: Response) => {
   const requestId = tagRequest(req);
   const parsed = appendSchema.safeParse(req.body);
   if (!parsed.success) {
+    const unknownType = parsed.error.issues.some(
+      (issue) => issue.path[0] === "action" && issue.code === "custom",
+    );
+    if (unknownType) {
+      return res.status(400).json({
+        error: {
+          code: CHANGELOG_ERROR_CODES.UNKNOWN_ENTRY_TYPE,
+          message: `Unknown changelog entry type. Allowed: ${Object.values(CHANGELOG_ENTRY_TYPES).join(", ")}`,
+        },
+      });
+    }
     return res.status(400).json({
       error: {
         code: "CHANGELOG_INVALID_PAYLOAD",

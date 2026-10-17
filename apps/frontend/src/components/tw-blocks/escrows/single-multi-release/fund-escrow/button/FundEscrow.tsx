@@ -10,6 +10,8 @@ import {
 } from "@/components/tw-blocks/handle-errors/handle";
 import { useEscrowContext } from "@/components/tw-blocks/providers/EscrowProvider";
 import { Loader2 } from "lucide-react";
+import { useFundingTrustline } from "../shared/useFundingTrustline";
+import { TrustlinePrompt } from "../shared/TrustlinePrompt";
 
 type FundEscrowButtonProps = {
   amount: number;
@@ -19,6 +21,7 @@ export const FundEscrowButton = ({ amount }: FundEscrowButtonProps) => {
   const { fundEscrow } = useEscrowsMutations();
   const { selectedEscrow, updateEscrow } = useEscrowContext();
   const { walletAddress } = useWalletContext();
+  const trustlineGuard = useFundingTrustline(walletAddress, selectedEscrow?.trustline);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   async function handleClick() {
@@ -34,6 +37,12 @@ export const FundEscrowButton = ({ amount }: FundEscrowButtonProps) => {
       }
 
       setIsSubmitting(true);
+
+      // Confirm the wallet can hold the escrow's asset before funding (#418);
+      // otherwise prompt for the trustline instead of failing on-chain.
+      if (!(await trustlineGuard.ensureTrustline())) {
+        return;
+      }
 
       /**
        * Create the payload for the fund escrow mutation
@@ -72,20 +81,32 @@ export const FundEscrowButton = ({ amount }: FundEscrowButtonProps) => {
   }
 
   return (
-    <Button
-      type="button"
-      disabled={isSubmitting}
-      onClick={handleClick}
-      className="cursor-pointer w-full"
-    >
-      {isSubmitting ? (
-        <div className="flex items-center">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          <span className="ml-2">Funding...</span>
-        </div>
-      ) : (
-        "Fund"
+    <>
+      <Button
+        type="button"
+        disabled={isSubmitting}
+        onClick={handleClick}
+        className="cursor-pointer w-full"
+      >
+        {isSubmitting ? (
+          <div className="flex items-center">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="ml-2">Funding...</span>
+          </div>
+        ) : (
+          "Fund"
+        )}
+      </Button>
+
+      {trustlineGuard.missingAsset && (
+        <TrustlinePrompt
+          asset={trustlineGuard.missingAsset}
+          accountNotFound={trustlineGuard.accountNotFound}
+          isEstablishing={trustlineGuard.isEstablishing}
+          onEstablish={trustlineGuard.establish}
+          onDismiss={trustlineGuard.dismiss}
+        />
       )}
-    </Button>
+    </>
   );
 };

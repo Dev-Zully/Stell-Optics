@@ -79,7 +79,10 @@ import { getRequestId } from "../middleware/requestLogger";
 export interface ChangelogEntry {
   /** Unique identifier for this log line. */
   entryId: string;
-  /** The kind of action recorded, e.g. "ownership_transferred", "escrow_funded". */
+  /**
+   * The entry type, e.g. "dispute.resolved" or "refund.completed". Writers
+   * must use a type from the taxonomy in ./changelog-taxonomy.ts (#416).
+   */
   action: string;
   /** The user or system component that performed the action. */
   actorId: string;
@@ -155,6 +158,7 @@ export const CHANGELOG_ERROR_CODES = {
   NOT_FOUND: "CHANGELOG_ENTRY_NOT_FOUND",
   INVALID_PAYLOAD: "CHANGELOG_INVALID_PAYLOAD",
   DUPLICATE_ENTRY: "CHANGELOG_DUPLICATE_ENTRY",
+  UNKNOWN_ENTRY_TYPE: "CHANGELOG_UNKNOWN_ENTRY_TYPE",
 } as const;
 
 /**
@@ -162,11 +166,12 @@ export const CHANGELOG_ERROR_CODES = {
  *
  * Refund and ownership-transfer routes must record these actions so every
  * completed refund / transfer has a permanent, immutable changelog entry.
+ * Values come from the shared entry-type taxonomy (issue #416).
  */
 export const CHANGELOG_ACTIONS = {
-  REFUND_SUBMITTED: "refund_submitted",
-  REFUND_COMPLETED: "refund_completed",
-  TRANSFER_COMPLETED: "ownership_transferred",
+  REFUND_SUBMITTED: CHANGELOG_ENTRY_TYPES.REFUND_SUBMITTED,
+  REFUND_COMPLETED: CHANGELOG_ENTRY_TYPES.REFUND_COMPLETED,
+  TRANSFER_COMPLETED: CHANGELOG_ENTRY_TYPES.TRANSFER_COMPLETED,
 } as const;
 
 export type ChangelogAction = (typeof CHANGELOG_ACTIONS)[keyof typeof CHANGELOG_ACTIONS];
