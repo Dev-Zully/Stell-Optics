@@ -12,6 +12,8 @@
 --             owner_id; check { owner_id: { _eq: X-Hasura-User-Id } }
 -- =============================================================================
 
+-- Up Migration
+
 CREATE EXTENSION IF NOT EXISTS postgis;
 
 CREATE TABLE IF NOT EXISTS events (
@@ -85,3 +87,25 @@ BEGIN
         RAISE NOTICE 'events migration verification: % legacy hospitality-shaped row(s) flagged in events_migration_audit; review before serving as ticket-resale events.', flagged;
     END IF;
 END $$;
+
+-- Down Migration
+--
+-- events may hold rows carried over from SafeTrust by 002's rename, so the
+-- table is only dropped when it is empty. A non-empty table is left in place
+-- for 002's down step to rename back to hotels. The postgis extension is left
+-- installed because other database objects may depend on it.
+
+DROP TABLE IF EXISTS events_migration_audit;
+DROP INDEX IF EXISTS idx_events_created_at;
+
+DO $$
+BEGIN
+    IF to_regclass('public.events') IS NOT NULL THEN
+        IF EXISTS (SELECT 1 FROM public.events) THEN
+            RAISE NOTICE 'events is not empty; leaving it in place for 002 down.';
+        ELSE
+            DROP TABLE public.events;
+        END IF;
+    END IF;
+END
+$$;

@@ -31,10 +31,16 @@ third party, not on the underlying settlement technology.
   launch concern, not a current-state one — this doc exists so it's on the
   record before that decision is made, not because it's blocking anything
   today.
-- `apps/backend` and `contracts/` are unwired scaffolds (see
-  [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)); once custom backend logic or
-  Soroban contracts are wired in, whoever does that wiring should re-check
-  this document, since custody/control could shift depending on the design.
+- **Updated 2026-10-18: custody/control has shifted since this note was
+  first written.** `apps/backend` is no longer a scaffold. It holds the
+  platform's dispute-resolver secret key
+  (`TRUSTLESS_WORK_DISPUTE_RESOLVER_SECRET`) and uses it to sign dispute
+  resolutions that send escrowed funds to the buyer (`POST
+  /api/refunds/claim`; see [`ARCHITECTURE.md`](ARCHITECTURE.md) and
+  [`RUNBOOKS.md`](RUNBOOKS.md)). So the operator directly controls where
+  disputed funds go, which is exactly the "who has practical control over
+  the funds" question raised above. The legal review below must take this
+  into account. `contracts/` is still an unwired placeholder.
 
 ## What's currently unknown / needs review before mainnet
 
@@ -48,8 +54,7 @@ third party, not on the underlying settlement technology.
   incorporates and who it markets to.
 - Whether any KYC/AML program is needed for buyers/sellers above a
   transaction-size or volume threshold, and if so, at what layer (frontend
-  onboarding, Trustless Work's own compliance posture, or a future
-  `apps/backend` service).
+  onboarding, Trustless Work's own compliance posture, or `apps/backend`).
 - Trustless Work's own regulatory posture and representations, since
   TrueStub currently delegates escrow orchestration to their hosted API
   rather than implementing custody logic itself — worth confirming directly

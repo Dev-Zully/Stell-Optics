@@ -47,7 +47,49 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Snapshot pre-migration schema
+        run: |
+          psql "$DATABASE_URL" -tAc "
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+            ORDER BY table_name" > "$RUNNER_TEMP/schema-before.txt"
+        env:
+          DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/safetrust
+
       - name: Apply database migrations
+        run: yarn workspace @truestub/backend migrate:up --check-order
+        env:
+          DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/safetrust
+
+      # Rolls every migration back one at a time, in reverse order, so a broken
+      # `-- Down Migration` section fails CI instead of failing during an
+      # incident. Then checks that rollback left no tables behind and that the
+      # migrations re-apply cleanly on top of the rolled-back schema.
+      - name: Roll back every migration
+        run: |
+          count=$(ls apps/backend/src/db/migrations/*.sql | wc -l)
+          for _ in $(seq "$count"); do
+            yarn workspace @truestub/backend migrate:down
+          done
+
+          remaining=$(psql "$DATABASE_URL" -tAc "SELECT count(*) FROM pgmigrations")
+          if [ "$remaining" != "0" ]; then
+            echo "::error::$remaining migration(s) still recorded in pgmigrations after rolling back $count."
+            exit 1
+          fi
+
+          psql "$DATABASE_URL" -tAc "
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name <> 'pgmigrations'
+            ORDER BY table_name" > "$RUNNER_TEMP/schema-after.txt"
+          if ! diff -u "$RUNNER_TEMP/schema-before.txt" "$RUNNER_TEMP/schema-after.txt"; then
+            echo "::error::Rolling back all migrations left the public schema different from before they were applied (diff above)."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/safetrust
+
+      - name: Re-apply database migrations after rollback
         run: yarn workspace @truestub/backend migrate:up --check-order
         env:
           DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/safetrust

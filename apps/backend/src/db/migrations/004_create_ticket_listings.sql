@@ -13,6 +13,8 @@
 -- Relationship: ticket_listings.listing_offers (array, listing_offers.listing_id)
 -- =============================================================================
 
+-- Up Migration
+
 CREATE TABLE IF NOT EXISTS ticket_listings (
     id SERIAL PRIMARY KEY,
     owner_id VARCHAR(255),
@@ -118,3 +120,9 @@ BEGIN
         )
     );
 END $$;
+
+-- Down Migration
+
+DROP TABLE IF EXISTS migration_verification_reports;
+DROP TABLE IF EXISTS listing_offers;
+DROP TABLE IF EXISTS ticket_listings;

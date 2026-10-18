@@ -6,7 +6,7 @@ Node workspaces:
 ```
 stellar-TrueStub/
 ├── apps/frontend/   → Next.js app, deployed to Vercel
-├── apps/backend/    → Express API, scaffold — not deployed anywhere yet
+├── apps/backend/    → Express API, no deploy target configured in this repo
 └── contracts/       → Stellar/Soroban contracts, placeholder — not deployed
 ```
 
@@ -39,15 +39,21 @@ pointed at the right subdirectory:
    documented in
    [`apps/frontend/docs/SETUP.md`](../apps/frontend/docs/SETUP.md#2-vercel-deployment-tokens).
 
-This workspace runs standalone in production the same way it does locally
-— see the note in the frontend README — so `apps/backend` does not need to
-be deployed for the frontend to work today.
+The core frontend flows (sign-in, Hasura data, Trustless Work escrow
+create/fund/release) work without the backend. These features need
+`apps/backend` deployed and `BACKEND_URL` / `NEXT_PUBLIC_BACKEND_URL` set:
+
+- user sync and password-reset validation (Next API routes proxy to it)
+- escrow-status webhooks (`/webhooks/escrow-status` forwards to it)
+- refunds and disputes
+- dispute metrics and listing alerts
 
 ## `apps/backend` → separate Node host or container platform
 
-`apps/backend` is currently a scaffold (see
-[`apps/backend/README.md`](../apps/backend/README.md)) and has no deploy
-target configured yet. It is **not** a Vercel deployment — Vercel's
+`apps/backend` is a working Express service (see
+[`apps/backend/README.md`](../apps/backend/README.md)), but this repository
+does not configure a deploy target for it. It ships with a `Dockerfile`, and
+`docker-compose.yml` runs it locally. It is **not** a Vercel deployment — Vercel's
 serverless model doesn't fit a long-running Express process the way this
 service is built, and it needs its own host entirely, independent of the
 frontend's Vercel project.
@@ -61,14 +67,17 @@ choice) since the workspace is a plain `tsc`-built Express app:
 2. Start: `yarn workspace @truestub/backend start`, or `node dist/index.js`
    run from `apps/backend` with `dist` present.
 3. Set the environment variables from
-   [`apps/backend/.env.example`](../apps/backend/.env.example) —
-   `PORT`, `NODE_ENV`, and, once the corresponding routes are live, the
-   Hasura/Firebase/Sentry variables described in the backend README's
-   [Running it](../apps/backend/README.md#running-it) and
-   [Observability](../apps/backend/README.md#observability) sections.
-4. Once deployed, point `apps/frontend`'s `BACKEND_URL` /
-   `NEXT_PUBLIC_WEBHOOK_URL` env vars at the new service (see the backend
-   README's "Roadmap: routes to migrate here" table), and set the
+   [`apps/backend/.env.example`](../apps/backend/.env.example). The full list,
+   with which ones are required, is in the table at the top of
+   [`apps/backend/README.md`](../apps/backend/README.md). Firebase Admin and
+   the Hasura admin secret are required. Trustless Work credentials are
+   required for refunds.
+4. Run the database migrations against the target database
+   (`yarn workspace @truestub/backend migrate:up`), then confirm the schema
+   with `apps/backend/scripts/check-migration-state.sql` (see
+   [`DATABASE.md`](DATABASE.md#cross-environment-migration-state)).
+5. Once deployed, point `apps/frontend`'s `BACKEND_URL` and
+   `NEXT_PUBLIC_BACKEND_URL` env vars at the new service, and set the
    `BACKEND_HEALTH_URL` repository variable so
    `.github/workflows/backend-uptime.yml` can monitor it.
 

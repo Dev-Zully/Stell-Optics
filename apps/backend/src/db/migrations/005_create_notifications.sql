@@ -7,6 +7,8 @@
 -- all statements are idempotent so existing installations can safely apply it.
 -- =============================================================================
 
+-- Up Migration
+
 CREATE TABLE IF NOT EXISTS notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL,
@@ -37,3 +39,8 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_price_tracking_listing
     ON watchlist_price_tracking(listing_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_price_tracking_user
     ON watchlist_price_tracking(user_id);
+
+-- Down Migration
+
+DROP TABLE IF EXISTS watchlist_price_tracking;
+DROP TABLE IF EXISTS notifications;

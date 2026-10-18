@@ -30,9 +30,63 @@ yarn workspace @truestub/backend migrate:up
 | `migration_verification_reports` | Records row counts and review details for the legacy domain migration. | `004_create_ticket_listings.sql` |
 | `notifications` | User-targeted in-app notifications with type, title, message, read state, and creation timestamp. | `005_create_notifications.sql` |
 | `watchlist_price_tracking` | A user's saved listing price and last-notified price; unique per user and listing. | `005_create_notifications.sql` |
+| `refund_idempotency` | Idempotency keys for refund requests; unique on both `idempotency_key` and `refund_id` so concurrent duplicates fail at the database. | `007_add_idempotency_unique_constraints.sql` |
+| `transfer_idempotency` | Same as `refund_idempotency`, for ownership-transfer requests. | `007_add_idempotency_unique_constraints.sql` |
+| `notification_dead_letters` | Notifications that could not be delivered, with the payload, last error, and attempt count. | `007_create_notification_dead_letters.sql` |
 
 Migration `006_normalize_events_primary_key.sql` renames the legacy primary-key
 constraint to `events_pkey` where required; it does not create a table.
+
+### Rolling back
+
+Every migration has a `-- Down Migration` section, and backend CI rolls all of
+them back in reverse order and re-applies them on every PR that touches
+`apps/backend`. To roll back the most recent migration locally:
+
+```bash
+yarn workspace @truestub/backend migrate:down
+```
+
+Two down steps are deliberately conservative because `events` may contain
+rows carried over from SafeTrust:
+
+- `003` drops `events` only when it is empty. Otherwise it leaves the table
+  in place.
+- `002` then renames a remaining `events` table back to `hotels` (and
+  `events_pkey` back to `hotels_pkey`), which mirrors its up step.
+
+`006`'s down step is a no-op on purpose.
+
+### Cross-environment migration state
+
+`002` and `003` are two different variants of the same hotels → events
+rename, so environments that applied different variants could end up with
+the `events` primary key named either `hotels_pkey` or `events_pkey`. `006`
+normalizes this. The migration files existing in the repository does not
+mean every environment has run them, so check each environment directly:
+
+```bash
+psql "$DATABASE_URL" -f apps/backend/scripts/check-migration-state.sql
+```
+
+The script is read-only. It lists the rows in `pgmigrations`, confirms that
+`006_normalize_events_primary_key` has been applied, checks the `events`
+primary-key name, and finishes with a `CONSISTENT` / `INCONSISTENT: …`
+verdict. If the verdict is `INCONSISTENT` because `006` hasn't run, run
+`migrate:up` against that environment and check again.
+
+Record each run below. The table was added on 2026-10-18 and no environment
+has been checked yet, so every row starts as pending.
+
+| Environment | Checked on | Highest migration in `pgmigrations` | `events` PK name | Verdict |
+| --- | --- | --- | --- | --- |
+| Staging | _pending_ | _pending_ | _pending_ | _pending_ |
+| Deployed previews (each one that has its own database) | _pending_ | _pending_ | _pending_ | _pending_ |
+| Shared local/dev databases used for testing | _pending_ | _pending_ | _pending_ | _pending_ |
+| Production (if any) | _pending_ | _pending_ | _pending_ | _pending_ |
+
+CI's Postgres service starts empty on every run, so it applies `006` every
+time and doesn't need a row.
 
 ## Hasura-managed application tables
 
@@ -86,8 +140,8 @@ that the hosting provider takes snapshots.
    - Self-managed Postgres: `pg_dump --format=custom --no-owner --no-acl \
      "$DATABASE_URL" > truestub-$(date +%Y%m%d%H%M%S).dump`
 3. Record the snapshot identifier, timestamp, and the migration version the
-   source database was at (`SELECT version FROM schema_migrations;` or the
-   highest applied file in `apps/backend/src/db/migrations/`).
+   source database was at (`SELECT name, run_on FROM pgmigrations ORDER BY run_on DESC LIMIT 1;`,
+   the table `node-pg-migrate` records applied migrations in).
 
 ### Restoring into a fresh environment
 
@@ -171,10 +225,11 @@ re-run since a schema or provider change should be treated as unverified.
 ## Changelog growth management
 
 The write-once changelog is immutable and append-only, so it grows without
-bound. The archival strategy for moving older entries out of hot storage is
-documented in [`CHANGELOG_ARCHIVAL.md`](./CHANGELOG_ARCHIVAL.md); consult it
-before adding indexes or queries that assume the full changelog history is
-resident in the hot table.
+bound. No archival strategy for moving older entries out of hot storage
+has been documented yet (an earlier version of this page linked to a
+`CHANGELOG_ARCHIVAL.md` that was never added). Until one is, don't add indexes
+or queries that assume the full changelog history will always be in the hot
+table.
 
 ## Schema maintenance
 

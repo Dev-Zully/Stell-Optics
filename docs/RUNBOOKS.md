@@ -6,108 +6,216 @@ no prior context on this codebase should be able to follow it.
 
 - [Stuck or failed refunds](#stuck-or-failed-refunds)
 
+_Last checked against the code: 2026-10-18 (`apps/backend/src/routes/refunds.ts`,
+`apps/backend/src/services/refund.service.ts`,
+`apps/backend/src/lib/trustless-work.ts`). If those files change, re-check
+this runbook._
+
 ---
 
 ## Stuck or failed refunds
 
-### Background
+### How a refund works
 
-Refunds are initiated by `apps/backend/src/services/dispute.service.ts` and
-processed through Trustless Work / the escrow contract. A refund request can
-fail in two distinct ways:
+A buyer's client calls `POST /api/refunds/claim` on the backend (Firebase
+auth required) with a `refundId` (idempotency key), the Trustless Work
+escrow contract id `escrowId` (`C…`), `refundTo` (buyer's Stellar address),
+and `amount` (the full disputed balance). The backend then:
 
-1. **The API call fails** — the refund route returns a non-2xx response
-   (commonly `502 Bad Gateway`) because Trustless Work or the contract
-   rejected the refund.
-2. **The API call succeeds but the claim is left in an unexpected state** —
-   `claim.status` is anything other than `submitted` after the refund was
-   supposed to be recorded.
+1. Records the claim with `status: "pending"`.
+2. Calls Trustless Work `POST /escrow/{single-release|multi-release}/resolve-dispute`
+   (or `resolve-milestone-dispute`), which returns an unsigned transaction.
+3. Signs it with the platform dispute-resolver key
+   (`TRUSTLESS_WORK_DISPUTE_RESOLVER_SECRET`).
+4. Submits it through Trustless Work `POST /helper/send-transaction`.
+5. On success, sets `status: "submitted"` and stores `txHash`. On any
+   failure, sets `status: "failed"` with a `failureReason`, and the request
+   returns an error.
 
-Both cases leave the refund "stuck": the money has not moved, but the system
-may believe a refund is in flight. This runbook covers how to diagnose and
-recover.
+The four claim statuses are `claimed`, `pending`, `submitted` and `failed`.
+Production only uses the last three. `claimed` appears only when the
+service runs without an on-chain executor.
 
-### 1. Look up the failed refund's state
+> **Important: claim records are not in the database.** They are held in an
+> in-memory map inside the backend process (`InMemoryRefundStore`). This has
+> three consequences for on-call:
+>
+> - A backend restart or redeploy erases every claim record. After a
+>   restart, `GET /api/refunds/claim/:refundId` returns `404`, even for
+>   refunds that settled. **The chain is the source of truth**, not the API.
+> - With more than one backend replica, each replica has its own map. A
+>   `404` can just mean that your request reached a different replica.
+> - There is no Hasura table for refund claims. Don't look for one.
 
-Start by identifying the claim and its current status.
+### What "stuck" looks like
 
-**Via the database (Hasura):**
+| Symptom | What it means |
+| --- | --- |
+| `502 REFUND_EXECUTION_FAILED` | Trustless Work or Stellar rejected one of steps 2–4. Claim is now `failed`. |
+| `503 REFUND_EXECUTION_UNAVAILABLE` | `TRUSTLESS_WORK_API_KEY` or `TRUSTLESS_WORK_DISPUTE_RESOLVER_SECRET` is not set on the backend. Nothing was sent. |
+| `503 REFUND_MAINNET_SUBMISSION_BLOCKED` | Documented in the route header (non-production environment configured for mainnet), but as of this review the claim path never raises it. If you do see it, nothing was sent. Fix the config; don't retry. |
+| `409 REFUND_ALREADY_CLAIMED` with `claim.status: "failed"` | Someone retried a failed refund with the same `refundId`. See [step 4](#4-recover). |
+| `409 REFUND_ALREADY_CLAIMED` with `claim.status: "pending"` | A first attempt is still in flight, or hung. See [step 3](#3-check-the-chain). |
+| Claim stays `pending` | The outbound call to Trustless Work hasn't returned. The backend sets no timeout on it. |
+| `400 REFUND_INVALID_PAYLOAD` | Bad request body (address format, amount ≤ 0, missing `milestoneIndex` for multi-release). Caller error, not an incident. |
 
-```graphql
-query StuckRefund($claimId: uuid!) {
-  claim_by_pk(id: $claimId) {
-    id
-    status
-    updated_at
-    dispute {
-      id
-      status
-      escrow_address
-    }
-  }
-}
+### 1. Collect the identifiers
+
+You need these before you start. Get them from the user report or from the
+logs:
+
+- `refundId` and `escrowId` (contract id, `C…`)
+- the request's correlation id (`requestId`). It is returned in the
+  `x-request-id` response header, appears on every log line, and is a tag on
+  the Sentry event.
+- which network the backend is on: `STELLAR_NETWORK` (`testnet` default, or
+  `mainnet`)
+
+**Logs:** search the backend logs for the `refundId`. These are the events,
+in order:
+
+| Log event | Level | Meaning |
+| --- | --- | --- |
+| `refund.claim.accepted` | info | Claim recorded as `pending`; on-chain call starting. |
+| `refund.executed` | info | Succeeded. Carries `txHash`. |
+| `refund.execution_failed` | error | Failed. `reason` carries the upstream message (see step 2). |
+| `refund.already_claimed` | warn | A repeat request for the same `refundId` was rejected. |
+
+**Sentry:** filter by the tag `refundId:<id>` or `requestId:<id>`. The route
+also attaches a `refund_failure` context with the error `code`.
+
+**API (only useful if the backend hasn't restarted since):**
+
+```bash
+curl -H "Authorization: Bearer <firebase-id-token>" \
+  "$BACKEND_URL/api/refunds/claim/<refundId>"
 ```
 
-- `claim.status` should be `submitted` once a refund has been accepted.
-- Any other value (`pending`, `rejected`, `failed`, `null`, etc.) means the
-  refund did not complete and needs manual recovery.
+Returns `{ claim: { status, txHash?, failureReason?, … } }` or `404`.
 
-**Via the on-chain transaction:**
+### 2. Read the failure reason
 
-1. Find the escrow address from the dispute record (`dispute.escrow_address`).
-2. Look up the escrow on the relevant block explorer (Stellar Expert for
-   Stellar/Soroban escrows).
-3. Inspect the most recent transactions for the escrow. A refund that was
-   rejected will either be absent or show a failed/reverted invocation.
-4. Note the transaction hash — you will need it if you escalate.
+The `502` message and the `reason` log field come from
+`apps/backend/src/lib/trustless-work.ts`. The wording tells you which step
+failed:
 
-### 2. What a `502` response typically indicates
+| `reason` starts with | Failed at | Did anything reach the chain? |
+| --- | --- | --- |
+| `Trustless Work /escrow/<type>/resolve-dispute failed: …` (or `resolve-milestone-dispute`) | Step 2: Trustless Work refused to build the transaction | **No.** Common causes: escrow not in dispute, already resolved, signer isn't the escrow's dispute resolver, amount ≠ disputed balance. The text after `failed:` is Trustless Work's message. |
+| `… returned no unsignedTransaction` | Step 2: unexpected Trustless Work response | **No.** |
+| `Trustless Work /helper/send-transaction failed: …` | Step 4: submission rejected by Trustless Work | **Probably not, but check.** The transaction was signed. |
+| `Stellar transaction <hash> was not accepted: …` | Step 4: Stellar didn't report `SUCCESS` | **Check the hash.** It is in the message. |
+| `TRUSTLESS_WORK_API_KEY and … must be configured` | Config (this is the `503`) | **No.** |
+| Anything else (e.g. `fetch failed`, a timeout) | Network error between backend and Trustless Work | **Unknown.** Treat as possibly submitted until step 3 proves otherwise. |
 
-A `502 Bad Gateway` returned from the refund path almost always means the
-upstream call to Trustless Work / the contract did **not** succeed. Common
-causes:
+Every message ends with `[requestId=…]`. Quote it when you contact Trustless
+Work.
 
-- The contract rejected the refund (e.g. the dispute is not in a refundable
-  state, the escrow is already resolved, or the signer is not authorized).
-- Trustless Work returned an error or was unreachable.
-- The escrow address or dispute state passed to the contract was stale.
+A `502` is **not** a transient blip to retry blindly. Always do step 3 first.
 
-A `502` is **not** a transient network blip to blindly retry — first confirm
-the on-chain state (step 1) so you do not double-refund.
+### 3. Check the chain
 
-### 3. Manual recovery steps
+The chain decides whether money moved. Use Stellar Expert:
 
-Work through these in order. Stop as soon as the refund is confirmed on-chain
-and `claim.status` is `submitted`.
+- Testnet: `https://stellar.expert/explorer/testnet/contract/<escrowId>`
+- Mainnet: `https://stellar.expert/explorer/public/contract/<escrowId>`
+- A specific transaction: replace `contract/<escrowId>` with `tx/<txHash>`.
 
-1. **Confirm nothing moved on-chain.** Re-check the escrow transactions
-   (step 1). If a refund already settled, do **not** retry — reconcile the
-   `claim.status` to `submitted` instead and close the incident.
-2. **Re-check the dispute state.** Ensure the dispute is still in a
-   refundable state and the escrow address matches the one on-chain. If the
-   dispute was resolved or cancelled, the refund is no longer valid — escalate
-   to the disputing parties (step 3).
-3. **Manually retry the refund.** Once you have confirmed the refund did not
-   settle and the dispute is still refundable, re-trigger the refund through
-   the normal refund path (the same route that calls
-   `dispute.service.ts`). Watch the response:
-   - `2xx` and `claim.status == submitted` → recovered. Close the incident.
-   - Another `502` → capture the response body and the on-chain transaction
-     hash, then escalate.
-4. **Escalate to the disputing parties.** If the refund cannot be completed
-   programmatically (contract rejection, dispute no longer refundable, or
-   repeated `502`s), notify the disputing parties with:
-   - the claim ID and dispute ID,
-   - the escrow address and any transaction hash,
-   - the observed `claim.status` and the error returned,
-   - the recommended next step (manual settlement or dispute re-opening).
-5. **Record the outcome.** Update the claim/dispute with the resolution and
-   note the incident in the on-call log so the next responder has context.
+Look at the escrow's most recent invocations:
+
+- **A successful dispute-resolution invocation after the claim time** →
+  the refund settled. Do **not** retry. Go to step 5.
+- **No such invocation, or only failed ones** → no money moved. Go to
+  step 4.
+
+You can also ask Trustless Work for the escrow's live state. This is the
+same call the backend's reconciliation code makes:
+
+```bash
+curl -H "x-api-key: $TRUSTLESS_WORK_API_KEY" \
+  "$TRUSTLESS_WORK_API_URL/escrow/<escrowId>"
+```
+
+A status that shows the dispute as resolved means the refund (or a
+release) already happened. Still in dispute means it didn't.
+
+If the claim is `pending` and step 3 shows nothing on-chain, wait a few
+minutes and check again before going further. The request may still be in
+flight. Retrying while it is in flight is exactly the race the idempotency
+key exists to prevent.
+
+### 4. Recover
+
+Before retrying, confirm **all** of the following:
+
+- [ ] Step 3 shows no successful resolution for this escrow.
+- [ ] The escrow is still **in dispute**. If it was resolved or released
+      some other way, a refund is no longer possible. Escalate (step 6).
+- [ ] `amount` equals the escrow's full disputed balance.
+- [ ] The backend's dispute-resolver public key is the escrow's
+      `disputeResolver`. A mismatch means a rotation happened (see
+      [`dispute-resolver-key-rotation.md`](dispute-resolver-key-rotation.md)).
+- [ ] The dispute-resolver wallet has enough XLM for fees.
+- [ ] For `Trustless Work … failed:` reasons, the underlying cause in the
+      message is fixed. Retrying a deterministic rejection fails the same way.
+
+**How to retry.** The route header says a `failed` claim can be retried with
+the same `refundId`. **In the current code it can't.** A second request with
+the same `refundId` returns `409 REFUND_ALREADY_CLAIMED` (with the failed
+claim in the body) and makes no on-chain call. Retry with a **new**
+`refundId`, keeping the same `escrowId`, `refundTo` and `amount`:
+
+```bash
+curl -X POST "$BACKEND_URL/api/refunds/claim" \
+  -H "Authorization: Bearer <firebase-id-token of the buyer>" \
+  -H "Content-Type: application/json" \
+  -d '{"refundId":"<original-refundId>-retry-1","escrowId":"C...","refundTo":"G...","amount":"<disputed balance>"}'
+```
+
+This is safe from double payment only because step 3 confirmed that nothing
+settled. The contract also refuses to resolve an already-resolved escrow.
+Record both `refundId`s in the incident notes.
+
+- `201` with `claim.status: "submitted"` and a `txHash` → confirm the hash
+  on Stellar Expert, then go to step 5.
+- Another `502` with the same reason → stop retrying and escalate (step 6).
+
+The route header also mentions a retry budget
+(`REFUND_NEEDS_MANUAL_INTERVENTION` after `MAX_REFUND_ATTEMPTS`). That code
+is not enforced in the current claim path either, so nothing will stop
+repeated manual retries. That makes the stop rule above your
+responsibility.
+
+### 5. Close out
+
+- Tell the buyer the refund settled and give them the `txHash`.
+- If the API still shows `failed` (or `404` after a restart) for a refund
+  that settled on-chain, that's expected. There is no persisted record to
+  fix. Note it in the incident.
+
+### 6. Escalate
+
+Escalate when the escrow is no longer in dispute, when Trustless Work keeps
+rejecting a correct request, or when you can't tell from the chain whether
+funds moved. Send Trustless Work support and the disputing parties:
+
+- `refundId` (and any retry ids), `escrowId`, network
+- the `requestId` correlation id(s)
+- the exact `reason` / `502` message
+- any `txHash`, and what Stellar Expert shows for it
+- what you already tried
+
+Recommend a next step: manual settlement, re-opening the dispute, or
+waiting on Trustless Work.
 
 ### Quick reference
 
-| Symptom | Likely cause | First action |
-| --- | --- | --- |
-| `502` from refund route | Trustless Work / contract rejected the refund | Check on-chain state (step 1) before retrying |
-| `claim.status != submitted` | Refund did not complete | Confirm on-chain, then manual retry (step 3) |
-| Repeated `502`s | Contract rejection or stale dispute state | Escalate to disputing parties (step 4) |
+| Symptom | First action |
+| --- | --- |
+| `502`, reason `… resolve-dispute failed: …` | Read the Trustless Work message, then check that the escrow is still in dispute (step 3). |
+| `502`, reason `Stellar transaction <hash> was not accepted` | Look up `<hash>` on Stellar Expert before anything else. |
+| `502`, network error | Treat as maybe-submitted. Step 3 before any retry. |
+| `503` | Configuration problem on the backend. Fix the env, then retry. |
+| `409` with `status: "failed"` | Retry with a **new** `refundId` after step 3 and the step 4 checklist. |
+| Stuck `pending` | Check the chain, wait, check again. Don't retry while the request may still be in flight. |
+| `404` from the status endpoint | Backend restarted or the request reached a different replica. Use the chain. |

@@ -1,5 +1,16 @@
 # Evaluation: Adopting Turborepo for Workspace Task Orchestration
 
+> **Historical: a point-in-time evaluation for issue #39 (written during the
+> 2026-08 monorepo restructure).** The numbers and repo description below
+> reflect the repo at that time.
+>
+> _Reviewed 2026-10-18:_ parts of this are now out of date. `apps/backend` is
+> no longer a "lightweight scaffold". It has auth, refunds, disputes,
+> transfers, webhooks and Postgres migrations, so adoption trigger #2 in §5 is
+> arguably met. The prototype `turbo.json` in §3 was never committed. The
+> recommendation hasn't been revisited. Re-measure before relying on the
+> benchmarks in §4.
+
 **Status**: Completed / Recommendation Filed  
 **Author**: TrueStub Engineering Team  
 **Issue Reference**: #39  

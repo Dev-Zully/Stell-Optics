@@ -8,8 +8,16 @@ running a fresh repo-wide grep.
 
 > **Keeping this current:** when you add a new
 > `// TODO: Replace with actual API call` (or equivalent GraphQL-wiring)
-> marker, add a row below and file a tracking issue for it. See the note in
+> marker, add a row below and file a tracking issue for it. When you remove
+> the last marker from a file, delete its row. See the note in
 > [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+>
+> **Last verified:** 2026-10-18, by grepping `apps/frontend/src` for wiring
+> markers. Re-run that grep if this date is old:
+>
+> ```bash
+> grep -rn "TODO: Replace with actual API call\|TODO: wire" apps/frontend/src
+> ```
 
 ## Status legend
 
@@ -21,22 +29,38 @@ running a fresh repo-wide grep.
 
 ## Current wiring gaps
 
-| Flow / file | Status | Tracking issue |
-| --- | --- | --- |
-| `apps/frontend/src/components/auth/NewPassword.tsx` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/components/profile/UserProfileCard.tsx` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/components/settings/NotificationPreferences.tsx` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/stores/favorites.store.ts` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/app/dashboard/earnings` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/app/dashboard/escrow/[id]/receipt` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/app/dashboard/listings/[id]/offers` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/components/escrow/TicketEscrowIntegration.tsx` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
-| `apps/frontend/src/components/escrow/TicketEscrowWrapper.tsx` | 🔴 Mocked | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
+| Flow / file | Status | Markers | Tracking issue |
+| --- | --- | --- | --- |
+| `apps/frontend/src/components/events/TicketEscrowIntegration.tsx` | 🔴 Mocked | 4 | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
+| `apps/frontend/src/components/ticket-events/TicketEscrowIntegration.tsx` | 🔴 Mocked | 4 | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
+| `apps/frontend/src/components/ticket-listing/TicketEscrowWrapper.tsx` | 🔴 Mocked | 3 | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
+| `apps/frontend/src/components/ticket-purchase/TicketEscrowWrapper.tsx` | 🔴 Mocked | 3 | [#319](https://github.com/frienzy514-png/stellar-TrueStub/issues/319) |
+| `apps/frontend/src/app/dashboard/events/new/page.tsx` (create event → `INSERT INTO public.events`) | 🔴 Mocked | 1 (`TODO: wire to Hasura mutation`) | _none filed_ |
+
+## Removed since the previous version of this table
+
+None of these files has a wiring marker any more. Some had moved, which
+left the old paths in this table pointing nowhere.
+
+| Previously listed as | Now |
+| --- | --- |
+| `components/auth/NewPassword.tsx` | Uses Firebase `confirmPasswordReset`; no marker. |
+| `components/profile/UserProfileCard.tsx` | Now `components/dashboard/UserProfileCard.tsx`; no marker. |
+| `components/settings/NotificationPreferences.tsx` | Now `components/dashboard/profile/NotificationPreferences.tsx` (calls `/api/graphql`) and `components/notifications/NotificationPreferences.tsx`; no marker in either. |
+| `stores/favorites.store.ts` | Now `core/store/data/favorites.store.ts`. No marker, but it still seeds from `STUB_EVENTS` mock data. |
+| `app/dashboard/earnings` | No marker. |
+| `app/dashboard/escrow/[id]/receipt` | No marker. |
+| `app/dashboard/listings/[id]/offers` | No marker. |
+| `components/escrow/TicketEscrowIntegration.tsx`, `components/escrow/TicketEscrowWrapper.tsx` | These paths don't exist. The real files are the four `TicketEscrow*` rows above. |
 
 ## Notes
 
-- The two `TicketEscrow*` copies are tracked separately because both still
-  contain their own wiring markers; consolidating them is out of scope here.
-- This list reflects the wiring gaps known at the time of writing. If you
-  find a marker that is missing from this table, add it (and file an issue)
-  rather than leaving it untracked.
+- The `TicketEscrow*` copies are tracked separately because each one still
+  has its own wiring markers. `ticket-events/` mirrors `events/`, and its
+  removal is tracked in [`DUPLICATE_BASENAMES.md`](DUPLICATE_BASENAMES.md).
+  Consolidating them is out of scope here.
+- `components/escrow/views/EscrowJustification.tsx` has a
+  `TODO: wire PDF generation` marker. That is a feature gap, not a GraphQL
+  wiring gap, so it isn't listed.
+- If you find a marker that is missing from this table, add it (and file an
+  issue) rather than leaving it untracked.

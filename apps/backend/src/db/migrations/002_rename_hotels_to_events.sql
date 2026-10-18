@@ -36,6 +36,8 @@
 -- and queryable after the migration runs.
 -- =============================================================================
 
+-- Up Migration
+
 DO $$
 BEGIN
     IF to_regclass('public.hotels') IS NOT NULL
@@ -123,5 +125,30 @@ BEGIN
                 'Renamed rows still look hospitality-shaped; review/backfill before treating as events.'
         END
     );
+END
+$$;
+
+-- Down Migration
+--
+-- Reverses the rename only when it is safe to: public.events must exist and
+-- public.hotels must not. 003's down step drops an empty events table first,
+-- so on a fresh database this is a no-op apart from the verification table.
+
+DROP TABLE IF EXISTS public.events_migration_verification;
+
+DO $$
+BEGIN
+    IF to_regclass('public.events') IS NOT NULL
+       AND to_regclass('public.hotels') IS NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'events_pkey'
+              AND conrelid = 'public.events'::regclass
+        ) THEN
+            ALTER TABLE public.events RENAME CONSTRAINT events_pkey TO hotels_pkey;
+        END IF;
+
+        ALTER TABLE public.events RENAME TO hotels;
+    END IF;
 END
 $$;

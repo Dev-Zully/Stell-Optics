@@ -8,6 +8,8 @@
 -- concurrent insert fail at the database level, guaranteeing that only one
 -- of two racing requests can succeed.
 
+-- Up Migration
+
 -- ---------------------------------------------------------------------------
 -- Refund idempotency
 -- ---------------------------------------------------------------------------
@@ -47,3 +49,8 @@ CREATE TABLE IF NOT EXISTS transfer_idempotency (
 -- recorded more than once regardless of which idempotency key is used.
 CREATE UNIQUE INDEX IF NOT EXISTS transfer_idempotency_transfer_id_unique
     ON transfer_idempotency (transfer_id);
+
+-- Down Migration
+
+DROP TABLE IF EXISTS transfer_idempotency;
+DROP TABLE IF EXISTS refund_idempotency;

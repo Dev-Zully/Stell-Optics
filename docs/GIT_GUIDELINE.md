@@ -58,7 +58,12 @@ Each commit message should follow this structure:
 - `test` 🧪: Adding or fixing tests
 - `build` 🏗️: Changes to the build system or external dependencies
 - `ci` 🔄: Changes to CI/CD scripts
+- `change` ✏️: Small changes or tweaks
+- `remove` 🗑️: File removals
 - `chore` 🛠️: Maintenance tasks or other minor changes
+
+These are exactly the types `commitlint.config.js` accepts. The `commit-msg`
+hook and CI reject anything else.
 
 ---
 
