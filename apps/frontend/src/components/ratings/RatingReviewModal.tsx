@@ -16,7 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { CheckCircle2, MessageSquare, Star, ShieldAlert } from "lucide-react";
-import { filterReviewContent } from "@/lib/moderation/reviewFilter";
+import { filterReviewContent } from "@/lib/moderation/review-content-filter";
 
 interface RatingReviewModalProps {
   escrowId: string;
@@ -60,9 +60,10 @@ export function RatingReviewModal({
     e.preventDefault();
     if (rating < 1) return;
 
-    const moderation = filterReviewContent(comment);
+    // The written review is optional, so an empty comment is never blocked.
+    const moderation = comment.trim() ? filterReviewContent(comment) : null;
 
-    if (moderation.blocked) {
+    if (moderation?.status === "rejected") {
       setModerationNotice(
         "Your review contains language that needs moderation review and has been held for review. Please revise your review before submitting."
       );
@@ -81,7 +82,7 @@ export function RatingReviewModal({
           rating,
           comment,
           role,
-          moderation_status: moderation.flagged ? "pending" : "published",
+          moderation_status: moderation?.status === "held" ? "pending" : "published",
         });
       }
       setIsSubmitted(true);

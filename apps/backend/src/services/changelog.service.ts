@@ -73,6 +73,7 @@
 
 import { AppError } from "../middleware/errorHandler";
 import { getRequestId } from "../middleware/requestLogger";
+import { CHANGELOG_ENTRY_TYPES } from "./changelog-taxonomy";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
