@@ -3,6 +3,8 @@ import { z } from "zod";
 import { firebaseAuth } from "../lib/firebase-admin";
 import { hasuraRequest } from "../lib/hasura";
 import { registerRoute } from "../lib/openapi";
+import { changelogService } from "../services/changelog.service";
+import { CHANGELOG_ENTRY_TYPES } from "../services/changelog-taxonomy";
 
 export const usersRouter = Router();
 
@@ -18,7 +20,9 @@ export const usersRouter = Router();
  *   2. Looks up the Hasura user row by email.
  *   3. Anonymizes PII columns (email, first_name, last_name, phone_number,
  *      profile_image_url, summary, location) and marks the row deleted.
- *   4. Deletes the Firebase Auth account so the user cannot sign back in.
+ *   4. Records a permanent `account.deleted` changelog entry keyed by the
+ *      Firebase uid (no PII — the service seals the timestamp).
+ *   5. Deletes the Firebase Auth account so the user cannot sign back in.
  *
  * Ticket listings and escrow records are intentionally retained for
  * auditability; the anonymization step detaches them from personally
@@ -249,6 +253,31 @@ usersRouter.delete("/me", async (req, res) => {
   } catch (error) {
     console.error("delete-user: hasura anonymization failed", error);
     return res.status(502).json({ error: "Failed to remove user data" });
+  }
+
+  try {
+    // Audit the deletion. Only the uid and reason are recorded — never the
+    // email or other PII that was just anonymized. The entryId is derived from
+    // the uid so a retried request (e.g. after a Firebase failure below)
+    // reuses the existing entry instead of hitting the write-once guard.
+    const entryId = `${CHANGELOG_ENTRY_TYPES.ACCOUNT_DELETED}:${decoded.uid}`;
+    if (!(await changelogService.getEntry(entryId))) {
+      await changelogService.appendEntry({
+        entryId,
+        action: CHANGELOG_ENTRY_TYPES.ACCOUNT_DELETED,
+        actorId: decoded.uid,
+        resourceId: decoded.uid,
+        metadata: { reason: "user_request" },
+      });
+    }
+  } catch (error) {
+    // The anonymization already happened, so don't fail the request — but
+    // flag the missing audit line for manual follow-up.
+    console.error(
+      "delete-user: changelog audit entry failed after hasura anonymization for uid",
+      decoded.uid,
+      error
+    );
   }
 
   try {
