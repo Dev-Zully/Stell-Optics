@@ -15,6 +15,11 @@
  *   1. DELETE /api/changelog/:entryId
  *   2. POST   /api/changelog  (with the corrected data)
  *
+ * Authentication (issue #379)
+ * ---------------------------
+ * Mounted behind `requireAuth` in index.ts. `actorId` is taken from the
+ * verified token, not the request body.
+ *
  * Entry types (issue #416)
  * ------------------------
  * `action` must be one of the entry types in services/changelog-taxonomy.ts
@@ -56,7 +61,6 @@ const appendSchema = z.object({
     .refine(isChangelogEntryType, {
       message: `action must be one of: ${Object.values(CHANGELOG_ENTRY_TYPES).join(", ")}`,
     }),
-  actorId: z.string().min(1, "actorId is required"),
   resourceId: z.string().min(1, "resourceId is required"),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -91,8 +95,17 @@ changelogRouter.post("/", async (req: Request, res: Response) => {
     });
   }
 
+  // The actor is always the verified caller (set by `requireAuth`), never a
+  // client-supplied field — otherwise audit entries could be forged (#379).
+  const actorId = (res.locals.user as { uid?: string } | undefined)?.uid;
+  if (!actorId) {
+    return res.status(401).json({
+      error: { code: "CHANGELOG_UNAUTHENTICATED", message: "Authentication required" },
+    });
+  }
+
   try {
-    const entry = await changelogService.appendEntry(parsed.data, { requestId });
+    const entry = await changelogService.appendEntry({ ...parsed.data, actorId }, { requestId });
     return res.status(201).json({ entry });
   } catch (err) {
     if (err instanceof AppError) {

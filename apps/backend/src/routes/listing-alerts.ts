@@ -5,15 +5,14 @@
  *   GET    /api/saved-searches           list the caller's saved searches
  *   DELETE /api/saved-searches/:id
  *   POST   /api/watchlist                watch a listing
- *   GET    /api/watchlist?userId=
- *   DELETE /api/watchlist/:listingId?userId=
+ *   GET    /api/watchlist                list the caller's watchlist
+ *   DELETE /api/watchlist/:listingId
  *   POST   /api/watchlist/price-check    run the watchlist price-change job (#334)
  */
 
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { listingAlertService } from "../services/listing-alert.service";
-import { verifyIdToken } from "../services/auth.service";
 
 export const savedSearchesRouter = Router();
 export const watchlistRouter = Router();
@@ -39,10 +38,15 @@ const priceCheckSchema = z.object({
   currentPrice: z.number().nonnegative(),
 });
 
-const userIdOf = (q: unknown) => (typeof q === "string" && q ? q : undefined);
+/**
+ * The caller's uid from the Firebase token verified by `requireAuth`
+ * (mounted in index.ts). Never read from the request body or query (#382).
+ */
+const authenticatedUserId = (res: Response): string | undefined =>
+  (res.locals.user as { uid?: string } | undefined)?.uid;
 
 savedSearchesRouter.post("/", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const parsed = searchSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -52,13 +56,13 @@ savedSearchesRouter.post("/", async (req, res) => {
 });
 
 savedSearchesRouter.get("/", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   return res.json(listingAlertService.listSearches(userId));
 });
 
 savedSearchesRouter.delete("/:id", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   return listingAlertService.deleteSearch(req.params.id, userId)
     ? res.status(204).end()
@@ -66,7 +70,7 @@ savedSearchesRouter.delete("/:id", async (req, res) => {
 });
 
 watchlistRouter.post("/", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const parsed = watchSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -80,13 +84,13 @@ watchlistRouter.post("/", async (req, res) => {
 });
 
 watchlistRouter.get("/", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   return res.json(listingAlertService.listWatched(userId));
 });
 
 watchlistRouter.delete("/:listingId", async (req, res) => {
-  const userId = await authenticatedUserId(req);
+  const userId = authenticatedUserId(res);
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   return listingAlertService.unwatch(userId, req.params.listingId)
     ? res.status(204).end()
