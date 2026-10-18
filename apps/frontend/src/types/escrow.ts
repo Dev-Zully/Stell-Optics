@@ -1,3 +1,19 @@
+import { z } from "zod";
+
+/**
+ * Asset codes supported by multi-asset escrow. Keep in sync with the asset
+ * list in `components/tw-blocks/wallet-kit/trustlines.ts`.
+ */
+export const SUPPORTED_ESCROW_ASSETS = ["USDC", "XLM", "EURC"] as const;
+
+export type EscrowAsset = (typeof SUPPORTED_ESCROW_ASSETS)[number];
+
+export const escrowAssetSchema = z.enum(SUPPORTED_ESCROW_ASSETS);
+
+export function isSupportedEscrowAsset(value: unknown): value is EscrowAsset {
+  return escrowAssetSchema.safeParse(value).success;
+}
+
 export type EscrowStatus =
   | 'pending'
   | 'funded'
@@ -19,7 +35,7 @@ export interface RefundRecord {
   escrowId: string;
   status: RefundStatus;
   amount: string;
-  asset: string;
+  asset: EscrowAsset;
   /** Stellar transaction hash for the on-chain refund, when available. */
   transactionHash?: string;
   /** Ledger the refund transaction was included in, when available. */
@@ -37,7 +53,7 @@ export interface Escrow {
   id: string;
   status: EscrowStatus;
   amount: string;
-  asset: string;
+  asset: EscrowAsset;
   buyerId: string;
   sellerId: string;
   createdAt: string;

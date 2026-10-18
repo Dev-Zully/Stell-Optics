@@ -4,6 +4,8 @@ import "../src/i18n/config";
 
 const preview: Preview = {
   parameters: {
+    // Components use next/navigation (App Router) hooks such as useRouter.
+    nextjs: { appDirectory: true },
     backgrounds: {
       default: "light",
       values: [
