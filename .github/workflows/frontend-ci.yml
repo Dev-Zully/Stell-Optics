@@ -138,6 +138,86 @@ jobs:
 
           echo "Bundle size within budget."
 
+  # ─────────────────────────────────────────────────────────────────────────
+  # Firebase rules gate (closes #393)
+  #
+  # Runs `firebase-rules.test.ts` whenever `firestore.rules` or
+  # `storage.rules` is modified.  This is a REQUIRED check: a PR that
+  # weakens a security rule and breaks the test suite will be blocked from
+  # merging.
+  #
+  # The job uses `paths-filter` to detect rule-file changes, then runs the
+  # full firebase-rules test suite.  It is separate from the main `frontend`
+  # job so it can be required as a distinct status check in branch protection.
+  # ─────────────────────────────────────────────────────────────────────────
+  firebase-rules:
+    name: Firebase security rules tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect changed rules files
+        id: rules-changed
+        run: |
+          # Determine whether firestore.rules or storage.rules changed in this PR.
+          BASE_REF=""
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}" || true
+            BASE_REF="origin/${GITHUB_BASE_REF}"
+          fi
+
+          CHANGED=false
+          if [ -n "$BASE_REF" ] && git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
+            if git diff --name-only "$BASE_REF"...HEAD | grep -qE '^apps/frontend/(firestore|storage)\.rules$'; then
+              CHANGED=true
+            fi
+          else
+            # Fallback (push to branch with no base): always run.
+            CHANGED=true
+          fi
+
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Rules files changed: ${CHANGED}"
+
+      - name: Setup Node.js
+        if: steps.rules-changed.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Enable Corepack
+        if: steps.rules-changed.outputs.changed == 'true'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.rules-changed.outputs.changed == 'true'
+        run: yarn install --immutable
+
+      - name: Run Firebase rules tests
+        if: steps.rules-changed.outputs.changed == 'true'
+        # firebase-rules.test.ts uses @firebase/rules-unit-testing which
+        # requires the Firebase Emulator Suite.  The emulator JAR is bundled
+        # with the `firebase-tools` CLI; we start the emulators automatically
+        # via `FIREBASE_EMULATOR_HUB` and let the test environment connect.
+        run: |
+          npx --yes firebase-tools@latest emulators:exec \
+            --project demo-truestub-rules \
+            --only firestore,storage \
+            "yarn workspace @truestub/frontend test:ci --testPathPattern='firebase-rules'"
+        working-directory: apps/frontend
+        env:
+          # The project ID must match the one used in initializeTestEnvironment.
+          FIREBASE_PROJECT: demo-truestub-rules
+          # Suppress the interactive "install emulators?" prompt.
+          CI: "true"
+
+      - name: Skip message (no rules files changed)
+        if: steps.rules-changed.outputs.changed != 'true'
+        run: echo "No firestore.rules / storage.rules changes detected — skipping Firebase rules tests."
+
   secret-scan:
     name: Secret scanning
     runs-on: ubuntu-latest
