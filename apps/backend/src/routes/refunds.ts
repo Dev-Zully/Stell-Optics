@@ -73,17 +73,13 @@ const claimSchema = z.object({
 /**
  * Derive the caller's verified identity from the authenticated session.
  *
- * The session is populated by the auth middleware (e.g. `req.user` /
- * `req.auth`). We deliberately do NOT fall back to any client-supplied
- * value — an unauthenticated request must not be able to assert who it is
- * for an authorization-relevant field (issue #303).
+ * `requireAuth` (mounted in index.ts) verifies the Firebase ID token and
+ * exposes the decoded token as `res.locals.user`. We deliberately do NOT fall
+ * back to any client-supplied value — a request must not be able to assert
+ * who it is for an authorization-relevant field (issues #303, #380).
  */
-function getVerifiedUserId(req: Request): string | undefined {
-  const auth = (req as Request & {
-    user?: { id?: string; uid?: string };
-    auth?: { userId?: string; uid?: string };
-  });
-  return auth.user?.id ?? auth.user?.uid ?? auth.auth?.userId ?? auth.auth?.uid;
+function getVerifiedUserId(res: Response): string | undefined {
+  return (res.locals.user as { uid?: string } | undefined)?.uid;
 }
 
 /**
@@ -121,7 +117,7 @@ refundsRouter.post("/claim", async (req: Request, res: Response, next: NextFunct
     });
   }
 
-  const claimedBy = getVerifiedUserId(req);
+  const claimedBy = getVerifiedUserId(res);
   if (!claimedBy) {
     return res.status(401).json({
       error: {

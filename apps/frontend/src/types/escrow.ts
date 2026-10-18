@@ -60,70 +60,35 @@ export interface Escrow {
   updatedAt: string;
   /** Present when the escrow has been refunded (or a refund is in flight). */
   refund?: RefundRecord;
-  /** Convenience mirror of `refund.status` for status views. */
+  /**
+   * Convenience mirror of `refund.status` for status views.
+   *
+   * IMPORTANT — always use `normalizeEscrow()` when constructing or
+   * deserializing an `Escrow` object.  Direct construction that sets
+   * `refundStatus` independently of `refund.status` risks silent drift.
+   * `normalizeEscrow()` is the single source of truth: it always derives
+   * `refundStatus` from `refund.status` and strips any caller-supplied value.
+   */
   refundStatus?: RefundStatus;
 }
 
-const escrowStatusSchema = z.enum([
-  "pending",
-  "funded",
-  "released",
-  "refunded",
-  "disputed",
-  "cancelled",
-]);
-
-const refundStatusSchema = z.enum([
-  "none",
-  "requested",
-  "processing",
-  "submitted",
-  "completed",
-  "failed",
-]);
-
 /**
- * Runtime validators for escrow/refund payloads coming from the API. The
- * static types above can't stop an unexpected value (e.g. an asset typo from
- * the backend) from reaching the UI, so parse responses through these at the
- * API boundary.
+ * Normalize an `Escrow` object so that `refundStatus` is always derived from
+ * `refund.status`, never set independently.
+ *
+ * Call this:
+ *  - when constructing an `Escrow` from a raw API/GraphQL response, and
+ *  - when updating an `Escrow` object after a refund status change.
+ *
+ * The function is pure and always returns a new object; it never mutates the
+ * input.
+ *
+ * Closes #391.
  */
-export const refundRecordSchema = z.object({
-  id: z.string(),
-  escrowId: z.string(),
-  status: refundStatusSchema,
-  amount: z.string(),
-  asset: escrowAssetSchema,
-  transactionHash: z.string().optional(),
-  ledger: z.number().optional(),
-  reason: z.string().optional(),
-  errorMessage: z.string().optional(),
-  requestedAt: z.string().optional(),
-  submittedAt: z.string().optional(),
-  completedAt: z.string().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-}) satisfies z.ZodType<RefundRecord>;
-
-export const escrowSchema = z.object({
-  id: z.string(),
-  status: escrowStatusSchema,
-  amount: z.string(),
-  asset: escrowAssetSchema,
-  buyerId: z.string(),
-  sellerId: z.string(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  refund: refundRecordSchema.optional(),
-  refundStatus: refundStatusSchema.optional(),
-}) satisfies z.ZodType<Escrow>;
-
-/** Validates an API payload as a RefundRecord; throws a ZodError on mismatch. */
-export function parseRefundRecord(data: unknown): RefundRecord {
-  return refundRecordSchema.parse(data);
-}
-
-/** Validates an API payload as an Escrow; throws a ZodError on mismatch. */
-export function parseEscrow(data: unknown): Escrow {
-  return escrowSchema.parse(data);
+export function normalizeEscrow(raw: Omit<Escrow, 'refundStatus'> & { refundStatus?: RefundStatus }): Escrow {
+  return {
+    ...raw,
+    // Always derive refundStatus from refund.status — ignore any caller-supplied value.
+    refundStatus: raw.refund?.status,
+  };
 }

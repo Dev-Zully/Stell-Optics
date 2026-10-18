@@ -41,17 +41,17 @@ const initiateSchema = z.object({
 });
 
 /**
- * Derive the caller's verified identity from the authenticated session.
- * Never trust a client-supplied `fromOwner`/`userId` for authorization.
+ * Derive the caller's verified identity from the Firebase token decoded by
+ * `requireAuth` (mounted in index.ts) into `res.locals.user`.
+ * Never trust a client-supplied `fromOwner`/`userId` for authorization (#380).
  */
-function getVerifiedUserId(req: Request): string | null {
-  const user = (req as Request & { user?: { id?: string; uid?: string } }).user;
-  return user?.id ?? user?.uid ?? null;
+function getVerifiedUserId(res: Response): string | null {
+  return (res.locals.user as { uid?: string } | undefined)?.uid ?? null;
 }
 
 // POST /api/transfers/initiate
 transfersRouter.post("/initiate", async (req: Request, res: Response) => {
-  const fromOwner = getVerifiedUserId(req);
+  const fromOwner = getVerifiedUserId(res);
   if (!fromOwner) {
     return res.status(401).json({
       error: { code: "TRANSFER_UNAUTHENTICATED", message: "Authentication required" },
@@ -89,7 +89,7 @@ transfersRouter.post("/initiate", async (req: Request, res: Response) => {
     Sentry.setContext("transfer", {
       transferId: parsed.data.transferId,
       escrowId: parsed.data.escrowId,
-      fromOwner: parsed.data.fromOwner,
+      fromOwner,
       toOwner: parsed.data.toOwner,
       requestId,
       failureStep: "initiateTransfer",
@@ -100,7 +100,7 @@ transfersRouter.post("/initiate", async (req: Request, res: Response) => {
 
 // POST /api/transfers/:transferId/accept
 transfersRouter.post("/:transferId/accept", async (req: Request, res: Response) => {
-  const actorId = getVerifiedUserId(req);
+  const actorId = getVerifiedUserId(res);
   if (!actorId) {
     return res.status(401).json({
       error: { code: "TRANSFER_UNAUTHENTICATED", message: "Authentication required" },
@@ -134,7 +134,7 @@ transfersRouter.post("/:transferId/accept", async (req: Request, res: Response) 
 
 // POST /api/transfers/:transferId/cancel
 transfersRouter.post("/:transferId/cancel", async (req: Request, res: Response) => {
-  const actorId = getVerifiedUserId(req);
+  const actorId = getVerifiedUserId(res);
   if (!actorId) {
     return res.status(401).json({
       error: { code: "TRANSFER_UNAUTHENTICATED", message: "Authentication required" },

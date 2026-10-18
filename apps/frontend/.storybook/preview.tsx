@@ -1,6 +1,5 @@
 import type { Preview } from "@storybook/react";
 import "../src/app/globals.css";
-// Initialise i18next so stories render real copy instead of translation keys.
 import "../src/i18n/config";
 
 const preview: Preview = {
