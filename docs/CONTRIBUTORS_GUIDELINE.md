@@ -62,7 +62,9 @@ We’re excited you’re interested in contributing! Please follow these steps t
 ## 5️⃣ Run the Project Locally
 
 1. Ensure the project runs correctly after making your changes.
-2. Follow the project-specific setup instructions to test your changes locally.
+2. Follow the setup instructions in the root [`CONTRIBUTING.md`](../CONTRIBUTING.md)
+   and run the relevant workspace's checks (e.g.
+   `yarn workspace @truestub/backend test`). This repo uses Yarn 4, not npm.
 
 ---
 
@@ -74,9 +76,18 @@ We’re excited you’re interested in contributing! Please follow these steps t
    git push origin your-branch-name
    ```
 
-2. ⚠️ **Note:** This repository uses Husky for pre-push hooks. Husky will automatically run `npm run format` and `npm run lint` before allowing the push.
+2. ⚠️ **Note:** This repository uses Husky git hooks, which run at commit
+   time (there is no pre-push hook):
 
-   - If you encounter errors, fix any formatting or linting issues before retrying the push.
+   - `pre-commit` scans staged files for secrets with gitleaks (see
+     [Secret Scanning](SECRET_SCANNING.md)) and blocks staged migrations
+     whose sequence number collides with an existing one.
+   - `commit-msg` runs commitlint against the
+     [Git Guidelines](GIT_GUIDELINE.md) convention.
+
+   Formatting and linting are not run by a hook. Run `yarn format:check` and
+   `yarn workspace @truestub/frontend lint` yourself before pushing. Frontend
+   CI runs lint on PRs.
 
 ---
 

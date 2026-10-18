@@ -1,5 +1,16 @@
 # Accessibility (A11y) Audit & Remediation Report
 
+> **Point-in-time snapshot from 2026-08-25. This is not a living document.** It
+> records the audit and the fixes made then. It does not describe components
+> added or changed since.
+>
+> _Reviewed 2026-10-18:_ the audited files still exist, but this audit has not
+> been re-run. `MetaMaskWalletModal.tsx`, `MainWalletSelectionModal.tsx` and
+> `WalletSelectionModal.tsx` are now in `components/auth/wallet/components/`. Neither
+> recommendation in §4 has been done yet: `eslint-plugin-jsx-a11y` is not a
+> frontend dependency, and CI has no axe-core run. For current accessibility
+> status, run a new audit instead of relying on the matrix below.
+
 **Date:** 2026-08-25  
 **Target Areas:** Dashboard (`apps/frontend/src/components/dashboard/`), Escrow Journey (`apps/frontend/src/components/escrow/`), Auth & Multi-Wallet Modals (`apps/frontend/src/components/auth/wallet/`).
 

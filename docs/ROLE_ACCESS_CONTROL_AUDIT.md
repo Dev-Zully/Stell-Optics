@@ -1,5 +1,14 @@
 # Role-Based Access Control Audit: Client-Only vs. Server-Enforced
 
+> **Point-in-time snapshot from 2026-08-27.** The split-responsibility model in
+> §4 is still the rule to follow. The inventory in §3 reflects the code as of
+> that date.
+>
+> _Reviewed 2026-10-18:_ the §3 inventory still holds. `RoleEscrowDashboard`
+> still reads from `fetchMockEscrows()`, and Hasura metadata is still not
+> checked into the repo. Re-check §3 when any role-gated surface is wired to a
+> real query.
+
 **Date:** 2026-08-27
 **Target:** `apps/frontend/src/utils/role-utils.ts` and every UI surface that reads its role.
 

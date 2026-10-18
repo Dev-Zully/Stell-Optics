@@ -1,5 +1,15 @@
 # Pivot Notes: SafeTrust → TrueStub
 
+> **Historical log.** Each section describes the repo at the time of that
+> change. Later sections don't update earlier ones.
+>
+> _Reviewed 2026-10-18:_ several "suggested follow-ups" below have since been
+> done or overtaken. The hotel/room components are gone, and the data-model
+> rename landed as migrations `002`/`003`/`006` (see
+> [`DATABASE.md`](DATABASE.md)). `apps/backend` is no longer a scaffold (see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md)). For the current state, read those docs,
+> not this one.
+
 This document records what changed when this repo was personalized from its
 upstream, [SafeTrust](https://github.com/safetrustcr/frontend-SafeTrust), and
 why — mostly for future-me, and for anyone else who forks this again.

@@ -4,6 +4,8 @@
 --              rename across databases that applied different rename variants.
 -- =============================================================================
 
+-- Up Migration
+
 DO $$
 BEGIN
     IF to_regclass('public.events') IS NOT NULL
@@ -16,3 +18,9 @@ BEGIN
     END IF;
 END
 $$;
+
+-- Down Migration
+--
+-- Intentionally a no-op. Renaming events_pkey back to hotels_pkey would
+-- reintroduce the inconsistency this migration removes. 002's down step
+-- restores hotels_pkey if the table itself is renamed back to hotels.

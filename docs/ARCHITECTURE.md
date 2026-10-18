@@ -1,68 +1,91 @@
 # Architecture
 
-This diagram covers every external service `apps/frontend` (the only piece
-of this monorepo that does real work today — see the root
-[`README.md`](../README.md#️-this-is-a-monorepo)) talks to, and where the
-currently-unwired `apps/backend` and `contracts/` scaffolds are intended to
-sit once they're wired in.
+This diagram covers every external service the TrueStub apps talk to.
+`apps/frontend` (Next.js) and `apps/backend` (Express) both do real work.
+`contracts/` is still a placeholder.
+
+_Last verified against the code: 2026-10-18. An earlier version of this page
+described `apps/backend` as an unwired scaffold. It hasn't been one for a
+while._
 
 ```mermaid
 flowchart LR
     User(["Buyer / Seller"])
 
-    subgraph Frontend["apps/frontend (Next.js) — the only wired piece today"]
+    subgraph Frontend["apps/frontend (Next.js, Vercel)"]
         UI["UI + escrow flow"]
+        NextAPI["Next API routes\n(/api/auth/*, /api/users/me,\n/webhooks/escrow-status)"]
+    end
+
+    subgraph Backend["apps/backend (Express)"]
+        API["REST API\n(refunds, disputes, transfers,\nlistings, watchlist, changelog, users)"]
+        WH["/webhooks/escrow-status\n(HMAC-verified)"]
     end
 
     Firebase[["Firebase\n(auth)"]]
-    Hasura[["Hasura GraphQL\n(remote, over Postgres)"]]
-    TW[["Trustless Work API\n(hosted escrow orchestration)"]]
+    Hasura[["Hasura GraphQL"]]
+    PG[("Postgres")]
+    TW[["Trustless Work API"]]
     Stellar(("Stellar network"))
 
     User --> UI
     UI -- "sign in / session" --> Firebase
-    UI -- "read/write ticket & escrow data" --> Hasura
+    UI -- "read/write ticket & escrow data\n(user JWT)" --> Hasura
     UI -- "create / fund / release escrow" --> TW
+    UI -- "dispute metrics, listing alerts\n(NEXT_PUBLIC_BACKEND_URL)" --> API
+    NextAPI -- "proxy (BACKEND_URL)" --> API
+    NextAPI -- "forwards webhook" --> WH
+
+    API -- "verify ID tokens" --> Firebase
+    API -- "privileged ops\n(admin secret, server only)" --> Hasura
+    API -- "resolve dispute → refund\n(signs with dispute-resolver key)" --> TW
+    TW -- "escrow status webhooks" --> WH
+    API -- "migrations (node-pg-migrate)" --> PG
+    Hasura --> PG
     TW -- "submits transactions" --> Stellar
 
-    subgraph Unwired["Not yet wired into the app above"]
-        direction LR
-        Backend["apps/backend\n(scaffold: health check + structure only)"]
-        Contracts["contracts/\n(placeholder: Soroban/Rust Cargo workspace)"]
-    end
-
-    Backend -. "future: custom backend logic,\nsee apps/backend/README.md roadmap" .-> Hasura
-    Contracts -. "future: custom Soroban contracts,\nsee contracts/README.md" .-> Stellar
+    Contracts["contracts/\n(placeholder Soroban workspace)"]
+    Contracts -. "not deployed / not called" .-> Stellar
 
     classDef unwired stroke-dasharray: 5 5;
-    class Backend,Contracts unwired;
+    class Contracts unwired;
 ```
 
 ## Reading the diagram
 
-- **Solid arrows** are live today: the frontend is the only piece of this
-  monorepo that talks to anything else, and it does so directly — there is
-  no local backend or contract deploy required to run it (see the root
-  [`README.md`](../README.md#️-this-is-a-monorepo) and
-  [`apps/frontend/README.md`](../apps/frontend/README.md) for the full
-  setup).
-- **Dashed arrows** are where `apps/backend` and `contracts/` are intended
-  to plug in once built out — they exist today only as scaffolds/placeholders
-  (see [`apps/backend/README.md`](../apps/backend/README.md)'s roadmap and
-  [`contracts/README.md`](../contracts/README.md)) and neither is called by
-  the frontend yet.
-- `docker-compose.yml` at the repo root brings up a **local** Postgres +
-  Hasura stack as an alternative to the remote Hasura endpoint the frontend
-  uses by default — not shown separately above since it's the same Hasura
-  box in the diagram, just self-hosted instead of remote.
+- **The frontend** still does most user-facing work directly: Firebase for
+  sign-in, Hasura for data (with the user's Firebase JWT), and Trustless
+  Work for creating, funding and releasing escrows.
+- **The backend** handles the operations that need a server-held secret or
+  server-side enforcement:
+  - Refunds: it signs the Trustless Work dispute resolution with the
+    platform's dispute-resolver key.
+  - Disputes, ownership transfers, and the audit changelog.
+  - Privileged Hasura writes made with the admin secret.
+  - Receiving Trustless Work's escrow-status webhooks.
+
+  The frontend reaches it in two ways: through its own Next API routes,
+  which proxy to `BACKEND_URL`, and directly from the browser through
+  `NEXT_PUBLIC_BACKEND_URL`.
+- **Postgres**: the backend's SQL migrations in
+  `apps/backend/src/db/migrations/` own some tables; Hasura manages the rest.
+  See [`DATABASE.md`](DATABASE.md).
+- **Not everything in the backend is durable yet.** Refund claims, dispute
+  state and the changelog are kept in memory. See
+  [`DATABASE.md`](DATABASE.md#service-ownership) and
+  [`RUNBOOKS.md`](RUNBOOKS.md).
+- `docker-compose.yml` brings up Postgres, Hasura and the backend locally.
+- **`contracts/`** is still a placeholder (`hello-world`). TrueStub's escrow
+  runs entirely on Trustless Work's hosted contracts.
 
 ## Services at a glance
 
-| Service | Role | Wired in today? |
+| Service | Role | Called by |
 | --- | --- | --- |
-| Firebase | User authentication | ✅ |
-| Hasura (+ Postgres) | Ticket & escrow data (GraphQL) | ✅ (remote by default; `docker-compose.yml` for local) |
-| Trustless Work API | Escrow creation, funding, transfer confirmation, release, arbitration | ✅ |
-| Stellar network | Underlying ledger Trustless Work settles escrow transactions on | ✅ (via Trustless Work, not called directly by the frontend) |
-| `apps/backend` | Future custom backend logic | ❌ scaffold only |
-| `contracts/` | Future custom Soroban contracts | ❌ placeholder only |
+| Firebase | User authentication; backend verifies ID tokens with Firebase Admin | frontend, backend |
+| Hasura (+ Postgres) | Ticket, listing, escrow and user data over GraphQL | frontend (user JWT), backend (admin secret) |
+| Postgres (direct) | Schema migrations | backend |
+| Trustless Work API | Escrow create/fund/release (frontend); dispute resolution / refunds and escrow status webhooks (backend) | frontend, backend |
+| Stellar network | Ledger Trustless Work settles on | via Trustless Work only |
+| `apps/backend` | Refunds, disputes, transfers, webhooks, changelog, listings, watchlist, user sync | frontend |
+| `contracts/` | Future custom Soroban contracts | nothing (placeholder) |

@@ -1,6 +1,7 @@
 # Design: Ticket-Transfer Verification Mechanism Before Escrow Release
 
-**Status**: Proposed  
+**Status**: Proposed (design proposal, not a description of shipped behavior)  
+**Last reviewed**: 2026-10-18. The referenced components (`EventMilestoneActions.tsx`, `TicketTransferApproval.tsx`, `TicketTransferCompletion.tsx`) still exist under `apps/frontend/src/components/events/`. Treat everything below as the proposal, not as what the code does.  
 **Author**: TrueStub Architecture Team  
 **Issue Reference**: #42  
 **Related Components**: `apps/frontend/src/components/events/EventMilestoneActions.tsx`, `TicketTransferApproval.tsx`, `TicketTransferCompletion.tsx`, `@trustless-work/escrow`

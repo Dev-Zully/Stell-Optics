@@ -71,6 +71,11 @@ secret-scan:
         GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # optional
 ```
 
+A separate check, the `frontend-secret-scan` job in
+`.github/workflows/security-and-deploy-checks.yml`, builds the frontend and
+fails if backend-only secrets show up in the bundle. That job is not gitleaks
+and is not covered further here.
+
 `fetch-depth: 0` gives the action full git history so it can compare the PR branch against its base. The action uses `GITHUB_TOKEN` (automatically provided by GitHub Actions) for checkout permissions — no extra secrets are required for public repos.
 
 `GITLEAKS_LICENSE` is optional and only needed for org-level scanning features on private repositories. You can leave it unset.
