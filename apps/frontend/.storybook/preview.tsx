@@ -1,8 +1,12 @@
 import type { Preview } from "@storybook/react";
 import "../src/app/globals.css";
+// Initialise i18next so stories render real copy instead of translation keys.
+import "../src/i18n/config";
 
 const preview: Preview = {
   parameters: {
+    // Components use next/navigation (App Router) hooks such as useRouter.
+    nextjs: { appDirectory: true },
     backgrounds: {
       default: "light",
       values: [
