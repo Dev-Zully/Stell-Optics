@@ -149,3 +149,79 @@ export async function fetchRecentEscrowStatusesFromPostgres(
   );
   return result.rows ?? [];
 }
+
+/**
+ * Escrow statuses that represent funds a buyer has already committed against a
+ * listing. While a listing has an escrow in one of these states, its price and
+ * terms are frozen: the seller must create a new listing instead of editing the
+ * one the buyer already agreed to.
+ */
+export const LOCKED_ESCROW_STATUSES = [
+  "pending",
+  "funded",
+  "in_progress",
+  "in-progress",
+  "active",
+  "released",
+  "completed",
+  "complete",
+] as const;
+
+export interface ListingEscrowLockRow {
+  id: string;
+  status: string;
+}
+
+interface ListingEscrowLockQueryResult {
+  escrow_transactions: ListingEscrowLockRow[];
+}
+
+/**
+ * Returns the escrow (if any) that locks a listing's price/terms.
+ *
+ * A listing is locked once a buyer has started an escrow against it (funds
+ * committed) or the escrow has completed. Callers on the listing edit path
+ * must reject price/terms changes when this returns a row, directing the
+ * seller to create a new listing instead.
+ */
+export async function findLockingEscrowForListing(
+  listingId: string,
+  options: HasuraRequestOptions = {}
+): Promise<ListingEscrowLockRow | null> {
+  const query = `
+    query LockingEscrowForListing($listingId: uuid!, $statuses: [String!]!) {
+      escrow_transactions(
+        where: { listing_id: { _eq: $listingId }, status: { _in: $statuses } }
+        limit: 1
+      ) {
+        id
+        status
+      }
+    }
+  `;
+
+  const data = await hasuraRequest<ListingEscrowLockQueryResult>(
+    query,
+    { listingId, statuses: [...LOCKED_ESCROW_STATUSES] },
+    options
+  );
+  return data.escrow_transactions?.[0] ?? null;
+}
+
+/**
+ * Postgres-backed variant of {@link findLockingEscrowForListing} for callers
+ * that already hold a direct connection. Mirrors the same lock semantics.
+ */
+export async function findLockingEscrowForListingFromPostgres(
+  listingId: string
+): Promise<ListingEscrowLockRow | null> {
+  const result = await queryWithTimeout<ListingEscrowLockRow>(
+    `SELECT id, status
+       FROM escrow_transactions
+      WHERE listing_id = $1
+        AND status = ANY($2::text[])
+      LIMIT 1`,
+    [listingId, [...LOCKED_ESCROW_STATUSES]]
+  );
+  return result.rows?.[0] ?? null;
+}
