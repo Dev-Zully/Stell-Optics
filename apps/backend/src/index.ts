@@ -21,8 +21,11 @@ import { changelogRouter } from "./routes/changelog";
 import { disputesRouter } from "./routes/disputes";
 // Issue #240 — account deletion / anonymization
 import { usersRouter } from "./routes/users";
-// #266 — 2FA recovery codes
-import { recoveryCodesRouter } from "./routes/recovery-codes";
+import { startDisputeResolverBalanceMonitor } from "./services/dispute-resolver-balance.service";
+
+// Initialise Sentry exactly once, before the app is created (#260). All Sentry
+// config lives in lib/sentry.ts.
+initSentry();
 
 export function createApp(): Express {
   const app = express();
