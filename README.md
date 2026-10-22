@@ -1,4 +1,4 @@
-# Stell-Optics
+Stell-Optics
 
 ### Bridging Stellar Blockchain and Everyday Mobile Connectivity
 
@@ -32,7 +32,7 @@ Traditional mobile data purchases often depend on conventional payment methods a
     width="100%"
   />
 
-  <h1>🌌 Stell-Optics</h1>
+  <h1> Stell-Optics</h1>
 
   <p>
     <strong>Turn XLM into Mobile Data.</strong>
