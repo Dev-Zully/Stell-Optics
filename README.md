@@ -1,4 +1,4 @@
-# 🌌 Stell-Optics
+# Stell-Optics
 
 ### Bridging Stellar Blockchain and Everyday Mobile Connectivity
 
