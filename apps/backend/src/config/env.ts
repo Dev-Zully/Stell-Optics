@@ -7,6 +7,8 @@ import { z } from "zod";
  * As real routes land (see README roadmap), their variables are typed here
  * to prevent silent runtime failures and eliminate direct `process.env` access.
  */
+
+
 export const envSchema = z.object({
   PORT: z
     .string()

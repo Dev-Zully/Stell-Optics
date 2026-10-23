@@ -1,79 +1,88 @@
 "use client";
 
 import { useQuery } from "@apollo/client";
-import { gql } from "@apollo/client";
-import { useTranslation } from "react-i18next";
-import { SellerEarnings } from "@/components/dashboard/SellerEarnings";
-import type { PayoutEscrow } from "@/lib/earnings";
-
-const SELLER_ESCROWS = gql`
-  query SellerEscrows($sellerId: uuid!) {
-    escrow_transactions(
-      where: { seller_id: { _eq: $sellerId } }
-      order_by: { released_at: desc }
-    ) {
-      id
-      listing_name
-      amount
-      currency
-      status
-      released_at
-    }
-  }
-`;
-
-type EscrowRow = {
-  id: string;
-  listing_name: string;
-  amount: number;
-  currency: string;
-  status: string;
-  released_at: string | null;
-};
-
-function toPayoutEscrow(row: EscrowRow): PayoutEscrow {
-  return {
-    id: row.id,
-    listingName: row.listing_name,
-    amount: row.amount,
-    currency: row.currency,
-    status: row.status,
-    releasedAt: row.released_at ?? undefined,
-  };
-}
+import { GET_EARNINGS } from "@/lib/graphql/queries";
+import { formatCurrency } from "@/lib/utils";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { AlertCircle } from "lucide-react";
 
 export default function EarningsPage() {
-  const { t } = useTranslation();
-  const sellerId = process.env.NEXT_PUBLIC_SELLER_ID;
+  const { data, loading, error } = useQuery(GET_EARNINGS);
 
-  const { data, loading, error } = useQuery<{ escrow_transactions: EscrowRow[] }>(
-    SELLER_ESCROWS,
-    { variables: { sellerId }, skip: !sellerId }
-  );
+  if (loading) {
+    return (
+      <div className="container mx-auto py-8">
+        <h1 className="text-3xl font-bold mb-6">Earnings</h1>
+        <div className="grid gap-4 md:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <Card key={i}>
+              <CardHeader>
+                <Skeleton className="h-4 w-24" />
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-8 w-32" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
-  const escrows: PayoutEscrow[] = (data?.escrow_transactions ?? []).map(toPayoutEscrow);
+  if (error) {
+    return (
+      <div className="container mx-auto py-8">
+        <h1 className="text-3xl font-bold mb-6">Earnings</h1>
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Failed to load earnings</AlertTitle>
+          <AlertDescription>
+            {error.message || "Something went wrong while fetching your earnings. Please try again later."}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const earnings = data?.earnings;
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-bold">{t("earnings.title")}</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          {t("earnings.subtitle")}
-        </p>
+    <div className="container mx-auto py-8">
+      <h1 className="text-3xl font-bold mb-6">Earnings</h1>
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Total Earned</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold">
+              {formatCurrency(earnings?.totalEarned ?? 0)}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold">
+              {formatCurrency(earnings?.pending ?? 0)}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Available</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-semibold">
+              {formatCurrency(earnings?.available ?? 0)}
+            </p>
+          </CardContent>
+        </Card>
       </div>
-      {loading ? (
-        <p className="text-muted-foreground text-sm">{t("earnings.loading")}</p>
-      ) : error ? (
-        <p className="text-destructive text-sm">
-          {t("earnings.error")}
-        </p>
-      ) : escrows.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          {t("earnings.empty")}
-        </p>
-      ) : (
-        <SellerEarnings escrows={escrows} />
-      )}
     </div>
   );
 }
