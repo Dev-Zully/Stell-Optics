@@ -71,6 +71,43 @@
   }
 }
 
+.stell-page {
+  font-family: var(--stell-sans, "Avenir Next", "Segoe UI", sans-serif);
+}
+
+.stell-brand-serif {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.stell-field {
+  border: 1px solid #dfe6e2;
+  background: #fff;
+  color: #23352f;
+  box-shadow: 0 1px 2px rgb(20 33 29 / 3%);
+}
+
+.stell-field:focus {
+  border-color: #2d725d;
+  outline: 3px solid rgb(45 114 93 / 10%);
+}
+
+.stell-orbit {
+  background-image:
+    radial-gradient(circle at 70% 40%, transparent 0 58px, rgb(255 255 255 / 70%) 59px 60px, transparent 61px 96px, rgb(255 255 255 / 55%) 97px 98px, transparent 99px),
+    linear-gradient(135deg, transparent 49%, rgb(255 255 255 / 35%) 50%, transparent 51%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stell-page section:first-of-type {
+    animation: stell-enter 600ms ease-out both;
+  }
+}
+
+@keyframes stell-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Multi-range slider support */
 input[type="range"]::-webkit-slider-thumb {
   pointer-events: auto !important;
