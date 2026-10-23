@@ -6,6 +6,8 @@ const normalizedPrivateKey = env.FIREBASE_ADMIN_PRIVATE_KEY.replace(/\\n/g, "\n"
 const shouldInitializeFirebase =
   env.NODE_ENV !== "test" && normalizedPrivateKey.includes("BEGIN ") && normalizedPrivateKey.includes("PRIVATE KEY");
 
+
+  
 /**
  * Firebase Admin App — initialized once at startup.
  *
