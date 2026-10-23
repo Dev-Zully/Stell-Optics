@@ -7,6 +7,9 @@
  * collision can be triaged (intentional, needs merging, or dead code).
  *
  * Usage:
+ * 
+ * 
+ * 
  *   node scripts/find-duplicate-basenames.mjs
  *
  * Exit code: 0 always (informational only — see #457 for the hard-failure
