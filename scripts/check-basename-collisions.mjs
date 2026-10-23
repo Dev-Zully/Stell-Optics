@@ -24,6 +24,8 @@
  *                     collision_count=<n>
  *                     collision_report=<multiline markdown>
  *
+ * 
+ * 
  * Intentionally excluded from the collision check:
  *   - Next.js reserved names: page.tsx, layout.tsx, route.ts, loading.tsx,
  *     error.tsx, not-found.tsx, template.tsx, default.tsx, opengraph-image.*,
