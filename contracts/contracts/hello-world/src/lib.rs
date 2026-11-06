@@ -1,38 +1,22 @@
-//! Placeholder Soroban contract.
+//! Stell-Optics Soroban contracts.
 //!
-//! This exists so `contracts/` has a real, buildable example rather than an
-//! empty folder. Nothing in the app calls this — TrueStub's escrow today
-//! runs entirely through Trustless Work's hosted contracts (see the
-//! workspace README). Swap this out once there's an actual custom contract
-//! to write.
+//! This crate contains the on-chain logic used by Stell-Optics to back
+//! selected purchase guarantees. Direct Stellar payments with backend
+//! verification remain the simpler starting point; these contracts are
+//! introduced where on-chain guarantees are valuable.
+//!
+//! - [`data_escrow`] — holds XLM for a mobile data purchase under
+//!   predefined conditions (Phase 3 escrow mechanism).
+//! - [`prepaid_balance`] — tracks on-chain prepaid balances for supported
+//!   use cases (Phase 3 prepaid service mechanism).
+//! - [`promo_program`] — transparent, rule-based rewards and incentives
+//!   (Phase 3 promotional program).
+
 #![no_std]
-use soroban_sdk::{contract, contractimpl, vec, Env, Symbol, Vec};
-
-#[contract]
-pub struct Contract;
-
-#[contractimpl]
-impl Contract {
-    pub fn hello(env: Env, to: Symbol) -> Vec<Symbol> {
-        vec![&env, Symbol::new(&env, "Hello"), to]
-    }
-}
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::Env;
+extern crate std;
 
-    #[test]
-    fn test_hello() {
-        let env = Env::default();
-        let contract_id = env.register(Contract, ());
-        let client = ContractClient::new(&env, &contract_id);
-
-        let words = client.hello(&Symbol::new(&env, "Dev"));
-        assert_eq!(
-            words,
-            vec![&env, Symbol::new(&env, "Hello"), Symbol::new(&env, "Dev")]
-        );
-    }
-}
+pub mod data_escrow;
+pub mod prepaid_balance;
+pub mod promo_program;
