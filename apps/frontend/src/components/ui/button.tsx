@@ -37,17 +37,34 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  loading?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, loading = false, type, children, disabled, ...props }, ref) => {
     const Comp = asChild ? Slot : "button";
+    const resolvedType = type ?? (asChild ? undefined : "button");
+
     return (
       <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(buttonVariants({ variant, size, className }), loading && "cursor-not-allowed opacity-80")}
         ref={ref}
+        type={resolvedType}
+        aria-busy={loading || undefined}
+        data-loading={loading || undefined}
+        data-slot="button"
+        disabled={disabled || loading}
         {...props}
-      />
+      >
+        {loading ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+            <span>{children}</span>
+          </span>
+        ) : (
+          children
+        )}
+      </Comp>
     );
   },
 );
