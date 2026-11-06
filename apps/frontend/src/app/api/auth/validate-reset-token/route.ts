@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { parseOr400, validateResetTokenSchema } from "@/lib/server/validation";
+import { getRequiredEnv, jsonError, proxyJsonRequest } from "@/app/api/_lib/http";
 
 export async function GET(request: Request) {
   try {
@@ -10,46 +11,29 @@ export async function GET(request: Request) {
     if (parsed.error) return parsed.error;
     const { token } = parsed.data;
 
-    const backendUrl = process.env.BACKEND_URL;
+    const backendUrl = getRequiredEnv("BACKEND_URL");
     if (!backendUrl) {
-      console.error("BACKEND_URL is not defined in environment variables");
-      return NextResponse.json(
-        { error: "Backend URL configuration error" },
-        { status: 500 },
-      );
+      return jsonError("Backend URL configuration error", 500);
     }
 
     const url = `${backendUrl}/api/auth/validate-reset-token?token=${encodeURIComponent(token)}`;
-    console.log("Making request to:", url);
+    const result = await proxyJsonRequest(url, { method: "GET" }, "Failed to validate token");
 
-    const response = await fetch(url);
-    console.log("Response status:", response.status);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Error response:", errorText);
+    if (!result.ok) {
       return NextResponse.json(
-        { error: "Failed to validate token" },
-        { status: response.status },
+        {
+          error:
+            result.data && typeof result.data === "object" && "error" in result.data
+              ? String((result.data as { error?: string }).error ?? "Failed to validate token")
+              : "Failed to validate token",
+        },
+        { status: result.status },
       );
     }
 
-    const data = await response.json();
-    console.log("Response data:", data);
-
-    return NextResponse.json(data);
+    return NextResponse.json(result.data ?? { valid: true });
   } catch (error) {
     console.error("Validate token API error:", error);
-    if (error instanceof Error) {
-      console.error("Error details:", {
-        message: error.message,
-        stack: error.stack,
-        cause: error.cause,
-      });
-    }
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return jsonError("Internal server error", 500);
   }
 }
