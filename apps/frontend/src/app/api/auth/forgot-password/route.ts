@@ -4,6 +4,11 @@ import {
   parseOr400,
   readJson,
 } from "@/lib/server/validation";
+import {
+  getRequiredEnv,
+  jsonError,
+  proxyJsonRequest,
+} from "@/app/api/_lib/http";
 
 export async function POST(request: Request) {
   try {
@@ -11,8 +16,13 @@ export async function POST(request: Request) {
     if (parsed.error) return parsed.error;
     const { email } = parsed.data;
 
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_WEBHOOK_URL}/webhooks/forgot-password`,
+    const webhookUrl = getRequiredEnv("NEXT_PUBLIC_WEBHOOK_URL");
+    if (!webhookUrl) {
+      return jsonError("Webhook URL configuration error", 500);
+    }
+
+    const result = await proxyJsonRequest(
+      `${webhookUrl}/webhooks/forgot-password`,
       {
         method: "POST",
         headers: {
@@ -20,23 +30,23 @@ export async function POST(request: Request) {
         },
         body: JSON.stringify({ email }),
       },
+      "Failed to process request",
     );
 
-    const data = await response.json();
-
-    if (!response.ok) {
+    if (!result.ok) {
       return NextResponse.json(
-        { error: data.error || "Failed to process request" },
-        { status: response.status },
+        {
+          error: result.data && typeof result.data === "object" && "error" in result.data
+            ? String((result.data as { error?: string }).error ?? "Failed to process request")
+            : "Failed to process request",
+        },
+        { status: result.status },
       );
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(result.data ?? { success: true });
   } catch (error) {
     console.error("Forgot password API error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return jsonError("Internal server error", 500);
   }
 }
