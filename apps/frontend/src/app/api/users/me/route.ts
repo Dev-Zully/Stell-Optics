@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getRequiredEnv, jsonError, proxyJsonRequest } from "@/app/api/_lib/http";
 
 /**
  * DELETE /api/users/me
@@ -18,45 +19,42 @@ export async function DELETE(request: Request) {
     if (!authorization) {
       return NextResponse.json(
         { error: "Authorization header is required" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    const backendUrl = process.env.BACKEND_URL;
+    const backendUrl = getRequiredEnv("BACKEND_URL");
     if (!backendUrl) {
-      console.error("BACKEND_URL is not set — cannot delete user data");
-      return NextResponse.json(
-        { error: "Backend URL configuration error" },
-        { status: 500 }
-      );
+      return jsonError("Backend URL configuration error", 500);
     }
 
-    const response = await fetch(`${backendUrl}/api/users/me`, {
-      method: "DELETE",
-      headers: {
-        Authorization: authorization,
-        "Content-Type": "application/json",
+    const result = await proxyJsonRequest(
+      `${backendUrl}/api/users/me`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: authorization,
+          "Content-Type": "application/json",
+        },
       },
-    });
+      "Failed to delete user",
+    );
 
-    const contentType = response.headers.get("content-type");
-    const data = contentType?.includes("application/json")
-      ? await response.json()
-      : null;
-
-    if (!response.ok) {
+    if (!result.ok) {
       return NextResponse.json(
-        { error: data?.error || "Failed to delete user" },
-        { status: response.status }
+        {
+          error:
+            result.data && typeof result.data === "object" && "error" in result.data
+              ? String((result.data as { error?: string }).error ?? "Failed to delete user")
+              : "Failed to delete user",
+        },
+        { status: result.status },
       );
     }
 
-    return NextResponse.json(data ?? { success: true, deleted: true });
+    return NextResponse.json(result.data ?? { success: true, deleted: true });
   } catch (error) {
     console.error("Delete user API error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return jsonError("Internal server error", 500);
   }
 }
