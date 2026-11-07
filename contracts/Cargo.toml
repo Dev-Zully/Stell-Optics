@@ -1,9 +1,21 @@
 [workspace]
 resolver = "2"
-members = ["contracts/hello-world"]
+members = [
+    "contracts/hello-world",
+    "contracts/data-escrow",
+    "contracts/prepaid-balance",
+    "contracts/promo-program",
+]
 
 [workspace.package]
 edition = "2021"
+authors = ["Optima-Maxi <dev@optima-maxi.org>"]
+license = "MIT"
+repository = "https://github.com/Dev-Zully/Stell-Optics"
+readme = "README.md"
+
+[workspace.dependencies]
+soroban-sdk = "22.0.0"
 
 [profile.release]
 opt-level = "z"
@@ -14,3 +26,25 @@ debug-assertions = false
 panic = "abort"
 codegen-units = 1
 lto = true
+
+[profile.dev]
+panic = "unwind"
+
+[profile.test]
+opt-level = 1
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_abs_to_int = "allow"
+# Soroban contracts store values on-chain; some arithmetic is intentionally
+# unchecked where the caller is trusted (backend operator).
+arithmetic_side_effects = "allow"
