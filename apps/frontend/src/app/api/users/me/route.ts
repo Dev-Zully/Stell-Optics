@@ -1,5 +1,14 @@
-import { NextResponse } from "next/server";
-import { getRequiredEnv, jsonError, proxyJsonRequest } from "@/app/api/_lib/http";
+import {
+  buildJsonHeaders,
+  getRequiredEnv,
+  jsonError,
+  jsonSuccess,
+  methodNotAllowed,
+  optionsResponse,
+  proxyErrorResponse,
+  proxyJsonRequest,
+  requireAuthorizationHeader,
+} from "@/app/api/_lib/http";
 
 /**
  * DELETE /api/users/me
@@ -14,47 +23,51 @@ import { getRequiredEnv, jsonError, proxyJsonRequest } from "@/app/api/_lib/http
  */
 export async function DELETE(request: Request) {
   try {
-    const authorization = request.headers.get("authorization");
-
-    if (!authorization) {
-      return NextResponse.json(
-        { error: "Authorization header is required" },
-        { status: 401 },
-      );
-    }
+    const auth = requireAuthorizationHeader(request);
+    if ("error" in auth) return auth.error;
 
     const backendUrl = getRequiredEnv("BACKEND_URL");
     if (!backendUrl) {
-      return jsonError("Backend URL configuration error", 500);
+      return jsonError("Backend URL configuration error", 500, "CONFIG_ERROR");
     }
 
     const result = await proxyJsonRequest(
       `${backendUrl}/api/users/me`,
       {
         method: "DELETE",
-        headers: {
-          Authorization: authorization,
-          "Content-Type": "application/json",
-        },
+        headers: buildJsonHeaders(request, { Authorization: auth.authorization }),
       },
       "Failed to delete user",
+      { request },
     );
 
     if (!result.ok) {
-      return NextResponse.json(
-        {
-          error:
-            result.data && typeof result.data === "object" && "error" in result.data
-              ? String((result.data as { error?: string }).error ?? "Failed to delete user")
-              : "Failed to delete user",
-        },
-        { status: result.status },
-      );
+      return proxyErrorResponse(result);
     }
 
-    return NextResponse.json(result.data ?? { success: true, deleted: true });
+    return jsonSuccess(result.data ?? { success: true, deleted: true }, { status: result.status });
   } catch (error) {
-    console.error("Delete user API error:", error);
-    return jsonError("Internal server error", 500);
+    console.error("[api/users/me] Unhandled error:", error);
+    return jsonError("Internal server error", 500, "INTERNAL_ERROR");
   }
+}
+
+export async function OPTIONS() {
+  return optionsResponse(["DELETE", "OPTIONS"]);
+}
+
+export async function GET() {
+  return methodNotAllowed(["DELETE", "OPTIONS"]);
+}
+
+export async function POST() {
+  return methodNotAllowed(["DELETE", "OPTIONS"]);
+}
+
+export async function PUT() {
+  return methodNotAllowed(["DELETE", "OPTIONS"]);
+}
+
+export async function PATCH() {
+  return methodNotAllowed(["DELETE", "OPTIONS"]);
 }
