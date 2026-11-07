@@ -1,53 +1,72 @@
-import { NextResponse } from "next/server";
+import {
+  buildJsonHeaders,
+  getRequiredEnv,
+  jsonError,
+  jsonSuccess,
+  methodNotAllowed,
+  optionsResponse,
+  proxyErrorResponse,
+  proxyJsonRequest,
+  requireJsonContentType,
+} from "@/app/api/_lib/http";
 import {
   parseOr400,
   readJson,
   resetPasswordSchema,
 } from "@/lib/server/validation";
-import {
-  getRequiredEnv,
-  jsonError,
-  proxyJsonRequest,
-} from "@/app/api/_lib/http";
 
 export async function POST(request: Request) {
   try {
+    const contentTypeError = requireJsonContentType(request);
+    if (contentTypeError) return contentTypeError;
+
     const parsed = parseOr400(resetPasswordSchema, await readJson(request));
     if (parsed.error) return parsed.error;
     const { token, newPassword } = parsed.data;
 
     const backendUrl = getRequiredEnv("BACKEND_URL");
     if (!backendUrl) {
-      return jsonError("Backend URL configuration error", 500);
+      return jsonError("Backend URL configuration error", 500, "CONFIG_ERROR");
     }
 
     const result = await proxyJsonRequest(
       `${backendUrl}/api/auth/reset-password`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: buildJsonHeaders(request),
         body: JSON.stringify({ token, newPassword }),
       },
       "Failed to reset password",
+      { request },
     );
 
     if (!result.ok) {
-      return NextResponse.json(
-        {
-          error:
-            result.data && typeof result.data === "object" && "error" in result.data
-              ? String((result.data as { error?: string }).error ?? "Failed to reset password")
-              : "Failed to reset password",
-        },
-        { status: result.status },
-      );
+      return proxyErrorResponse(result);
     }
 
-    return NextResponse.json(result.data ?? { success: true });
+    return jsonSuccess(result.data ?? { success: true }, { status: result.status });
   } catch (error) {
-    console.error("Reset password API error:", error);
-    return jsonError("Internal server error", 500);
+    console.error("[api/reset-password] Unhandled error:", error);
+    return jsonError("Internal server error", 500, "INTERNAL_ERROR");
   }
+}
+
+export async function OPTIONS() {
+  return optionsResponse(["POST", "OPTIONS"]);
+}
+
+export async function GET() {
+  return methodNotAllowed(["POST", "OPTIONS"]);
+}
+
+export async function PUT() {
+  return methodNotAllowed(["POST", "OPTIONS"]);
+}
+
+export async function PATCH() {
+  return methodNotAllowed(["POST", "OPTIONS"]);
+}
+
+export async function DELETE() {
+  return methodNotAllowed(["POST", "OPTIONS"]);
 }
