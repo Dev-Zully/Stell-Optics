@@ -1,0 +1,15 @@
+[package]
+name = "data-escrow"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Soroban escrow for Stell-Optics mobile data purchases"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk.workspace = true
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
