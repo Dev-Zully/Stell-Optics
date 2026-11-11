@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { AppError } from "../middleware/errorHandler";
 import { assessListingRisk } from "../services/listing-fraud.service";
 import { listingAlertService } from "../services/listing-alert.service";
 import { registerRoute } from "../openapi/registry";
@@ -137,4 +138,17 @@ listingsRouter.patch("/:id", async (req, res, next) => {
   } catch (err) {
     return next(err);
   }
+});
+
+// GET /api/listings/:id — fetch a single listing by id.
+listingsRouter.get("/:id", async (_req, res, next) => {
+  // Listings are sourced from the listings table via Hasura / Postgres in a
+  // future migration. For now this route documents the shape and returns 404
+  // until a listing store is wired up (#TBD).
+  return next(new AppError(404, "LISTING_NOT_FOUND", `Listing not found: ${_req.params.id}`));
+});
+
+// DELETE /api/listings/:id — soft-delete a listing the caller owns.
+listingsRouter.delete("/:id", async (_req, res, next) => {
+  return next(new AppError(404, "LISTING_NOT_FOUND", `Listing not found: ${_req.params.id}`));
 });
