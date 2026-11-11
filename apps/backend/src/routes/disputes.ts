@@ -205,7 +205,9 @@ disputesRouter.get("/mine", async (req: Request, res: Response) => {
 // GET /api/disputes/sla/breaches — must come before /:disputeId
 disputesRouter.get("/sla/breaches", async (req: Request, res: Response) => {
   const requestId = tagSentryWithRequestId(req);
-  const escalated = await disputeService.listDisputesByState("ESCALATED", { requestId });
+  const escalated = await withRetry(() =>
+    disputeService.listDisputesByState("ESCALATED", { requestId }),
+  );
   const now = Date.now();
   const breaches = escalated
     .map((dispute) => {
