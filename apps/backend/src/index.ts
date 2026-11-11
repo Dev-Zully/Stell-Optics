@@ -10,10 +10,16 @@ import { authRateLimiter, writeRateLimiter } from "./middleware/rateLimiter";
 import { requireAdmin, requireAuth, requireAuthForWrites } from "./middleware/auth";
 import { errorHandler } from "./middleware/errorHandler";
 import { captureRawBody } from "./middleware/rawBody";
+import { apiKeyMiddleware } from "./middleware/apiKey";
+import { apiVersionMiddleware } from "./middleware/apiVersion";
+import { requestSizeLimit } from "./middleware/requestSizeLimit";
+import { responseTimeMiddleware } from "./middleware/responseTime";
+import { timeoutMiddleware } from "./middleware/timeout";
 import { healthRouter } from "./routes/health";
 import { listingsRouter } from "./routes/listings";
 import { savedSearchesRouter, watchlistRouter } from "./routes/listing-alerts";
 import { webhookRouter } from "./routes/webhooks";
+import { metricsRouter } from "./routes/metrics";
 // Issues #153–#156
 import { refundsRouter } from "./routes/refunds";
 import { transfersRouter } from "./routes/transfers";
@@ -35,11 +41,21 @@ export function createApp(): Express {
   app.use(helmetMiddleware);
   app.use(corsMiddleware);
   app.use(requestLogger);
-  // Keep the raw bytes for HMAC-verified webhooks (see routes/webhooks.ts).
+  app.use(responseTimeMiddleware);
+  // Global API middleware: version header, body-size cap, request timeout,
+  // then admin API-key enforcement. Mounted before every route so new routers
+  // inherit them automatically. Keep these after the raw-body capture so
+  // HMAC-verified webhooks still see the unaltered body.
   app.use(express.json({ verify: captureRawBody }));
+  app.use(apiVersionMiddleware);
+  app.use(requestSizeLimit);
+  app.use(timeoutMiddleware);
+  app.use(apiKeyMiddleware);
   app.use("/api/auth", authRateLimiter);
   app.use("/api/auth/recovery-codes", recoveryCodesRouter);
   app.use("/health", healthRouter);
+  // Admin metrics — API-key-gated via apiKeyMiddleware mounted globally.
+  app.use("/api/metrics", metricsRouter);
   app.use("/api/listings", writeRateLimiter, requireAuthForWrites, listingsRouter);
   app.use("/api/saved-searches", writeRateLimiter, requireAuth, savedSearchesRouter);
   app.use("/api/watchlist", writeRateLimiter, requireAuth, watchlistRouter);
