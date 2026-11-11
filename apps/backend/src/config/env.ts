@@ -84,6 +84,19 @@ export const envSchema = z.object({
   // (#328). Distinct from the general Sentry error stream so these events get
   // human attention faster. When unset, alerts fall back to the error log.
   CRITICAL_ALERT_WEBHOOK_URL: z.string().url("CRITICAL_ALERT_WEBHOOK_URL must be a valid URL").optional(),
+
+  // Admin bearer key for service-to-service / admin endpoints (metrics, sync).
+  // When unset those routes stay open (safe local-dev default).
+  API_KEY_ADMIN: z.string().min(1).optional(),
+
+  // Request timeout (#440).
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
+  // Max request body size in bytes (#441).
+  MAX_REQUEST_BODY_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
+
+  // API version advertised in the X-API-Version response header (#442).
+  API_VERSION: z.string().min(1).default("1.0.0"),
 });
 
 export type Env = z.infer<typeof envSchema>;
